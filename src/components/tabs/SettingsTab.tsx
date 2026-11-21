@@ -1,0 +1,2120 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { AutomationTask, NotificationPreferences, User, IndustryOptimizationSuggestion, BusinessAccount, BusinessMember, TeamInvite, TabType } from '../../types';
+import { userPreferencesService } from '../../services/userPreferencesService';
+import { getAutomationLog, AutomationLogEntry } from '../../utils/automationLog';
+import { timeAgoShort, describeFollowupWindow } from '../../utils/automation';
+import { asText, asScore, asStringList } from '../../utils/safeRender';
+import { FOLLOWUP_META, isFollowupRuleId } from '../../utils/followups';
+import { MAX_BUSINESS_KNOWLEDGE_LENGTH } from '../../utils/agentBehavior';
+import { DiagnosticsPanel } from '../diagnostics/DiagnosticsPanel';
+import { AppCheckPanel } from '../diagnostics/AppCheckPanel';
+import { TrainingChecklist } from '../training/TrainingChecklist';
+import { employeeCustomizationService, CustomAIEmployee } from '../../services/employeeCustomizationService';
+import { EmployeeJobCustomizerModal } from '../employees/EmployeeJobCustomizerModal';
+import { haptic } from '../../utils/haptics';
+import { deleteAccount, isReauthRequired } from '../../services/accountDeletionService';
+import { GET_STARTED_ITEMS } from '../../utils/getStartedChecklist';
+import { teamService } from '../../services/teamService';
+import { authService } from '../../services/authService';
+import { apiFetch } from '../../lib/api';
+import { auth } from '../../lib/firebase';
+import { biometricService } from '../../services/biometricService';
+import { DEFAULT_PROFILE_PICTURES, defaultPictureDataUrl, downscaleImageFile, resolveProfilePicture } from '../../utils/profilePicture';
+import { 
+  Plus, 
+  Zap, 
+  ZapOff, 
+  CheckCircle2, 
+  Bot, 
+  Volume2, 
+  VolumeX, 
+  Smartphone, 
+  Bell, 
+  Sparkles, 
+  Activity, 
+  Sliders, 
+  ShieldAlert,
+  Check,
+  User as UserIcon,
+  LogOut,
+  Building2,
+  Phone,
+  Clock,
+  Briefcase,
+  Users,
+  HardDrive,
+  RefreshCw,
+  Trash2,
+  Edit3,
+  Layers,
+  ShieldCheck,
+  SmartphoneNfc,
+  Wrench,
+  ArrowRight,
+  X,
+  History,
+  MessageSquare,
+  PhoneMissed,
+  Star,
+  Siren,
+  FileText,
+  Copy,
+  UserPlus,
+  GraduationCap,
+  BookOpen,
+  ChevronRight,
+} from 'lucide-react';
+
+/** Values from the Settings → My Profile editor. */
+export interface ProfileUpdate {
+  fullName: string;
+  phone: string;
+  contactEmail: string;
+  profilePicture: string;
+}
+
+interface SettingsTabProps {
+  currentUser?: User | null;
+  businessId?: string;
+  business?: BusinessAccount | null;
+  onUpdateProfile?: (profile: ProfileUpdate) => Promise<void>;
+  /** Owner-only: save the company's public contact phone/email. */
+  onUpdateCompanyContact?: (contact: { contactPhone: string; contactEmail: string }) => Promise<void>;
+  onUpdateBusinessKnowledge?: (knowledge: string) => Promise<void>;
+  onLogout?: () => void;
+  automationTasks: AutomationTask[];
+  onToggleAutomation: (taskId: string, isAutomated: boolean) => void;
+  onPauseAutomation: (taskId: string, paused: boolean) => void;
+  onResetAutomation: (taskId: string) => void;
+  onUpdateAutomationTemplate?: (taskId: string, template: string) => void;
+  onUpdateAutomationReviewLink?: (taskId: string, link: string) => void;
+  automationMasterOn: boolean;
+  onToggleMaster: (on: boolean) => void;
+  conditionalLogicOn: boolean;
+  onToggleConditionalLogic: (on: boolean) => void;
+  industryModifierOn: boolean;
+  onToggleIndustryModifier: (on: boolean) => void;
+  industryName?: string;
+  onAddCustomTask: (task: AutomationTask) => void;
+  /** Owner-only: save the Company Profile card (business name + public contact phone/email). */
+  onUpdateCompanyProfile?: (profile: { name: string; contactPhone: string; contactEmail: string }) => Promise<void>;
+  autoDispatchThreshold: 'all' | 'critical' | 'high' | 'manual';
+  onUpdateAutoDispatchThreshold: (threshold: 'all' | 'critical' | 'high' | 'manual') => void;
+  /** Owner-only: save the Multi-Agent Autonomy Mode to the business record. */
+  onUpdateAutonomyMode: (mode: 'autonomous' | 'supervised') => Promise<void>;
+  notifPreferences: NotificationPreferences;
+  onUpdateNotifPreferences: (prefs: NotificationPreferences) => void;
+  onTriggerTestPush: () => void;
+  onOpenNotifPrefsModal: () => void;
+  onReopenOnboarding?: () => void;
+  /** Navigates straight to a section (App Guide list + checklist
+   *  "show again"). Plain navigation — no overlay card on top. */
+  onNavigateTab?: (tab: TabType) => void;
+  /** Brings the dismissed Dashboard "Get started" checklist back. */
+  onShowGetStartedChecklist?: () => void;
+  onOpenServiceManager?: () => void;
+  businessServices?: string[];
+  proactiveSuggestion?: IndustryOptimizationSuggestion | null;
+  onReviewSuggestion?: () => void;
+  onDismissSuggestion?: () => void;
+  /** Open the Team Chat screen. */
+  onOpenTeamChat?: () => void;
+  /** Leave the team (members only) — the app signs the user out after. */
+  onLeaveTeam?: () => Promise<void>;
+  /** Section to show on first render. Defaults to 'user'. The caller remounts on navigation. */
+  initialSection?: 'user' | 'agents' | 'device';
+}
+
+/** Icon per automation rule, so rule rows read like the reference
+ *  Automation screen (icon tile + name + description). Restyle only —
+ *  the rule ids and firing logic are unchanged. */
+function ruleIcon(taskId: string) {
+  switch (taskId) {
+    case 'rule-welcome': return MessageSquare;
+    case 'rule-missed-call': return PhoneMissed;
+    case 'rule-review': return Star;
+    case 'rule-emergency': return Siren;
+    case 'rule-quote-gate': return FileText;
+    case 'rule-proactive': return Sparkles;
+    default: return Zap;
+  }
+}
+
+export const SettingsTab: React.FC<SettingsTabProps> = ({
+  currentUser,
+  businessId,
+  business,
+  onUpdateProfile,
+  onUpdateCompanyContact,
+  onUpdateCompanyProfile,
+  onUpdateBusinessKnowledge,
+  onLogout,
+  automationTasks,
+  onToggleAutomation,
+  onPauseAutomation,
+  onResetAutomation,
+  onUpdateAutomationTemplate,
+  onUpdateAutomationReviewLink,
+  automationMasterOn,
+  onToggleMaster,
+  conditionalLogicOn,
+  onToggleConditionalLogic,
+  industryModifierOn,
+  onToggleIndustryModifier,
+  industryName,
+  onAddCustomTask,
+  autoDispatchThreshold,
+  onUpdateAutoDispatchThreshold,
+  onUpdateAutonomyMode,
+  notifPreferences,
+  onUpdateNotifPreferences,
+  onTriggerTestPush,
+  onOpenNotifPrefsModal,
+  onReopenOnboarding,
+  onNavigateTab,
+  onShowGetStartedChecklist,
+  onOpenServiceManager,
+  businessServices = [],
+  proactiveSuggestion,
+  onReviewSuggestion,
+  onDismissSuggestion,
+  onOpenTeamChat,
+  onLeaveTeam,
+  initialSection,
+}) => {
+  // Navigation: 3 clean client-facing sections
+  const [activeSection, setActiveSection] = useState<'user' | 'agents' | 'device'>(initialSection ?? 'user');
+  // App Guide section list: expanded inline in Settings, never an
+  // overlay. Tapping a section navigates straight to that real screen.
+  const [guideExpanded, setGuideExpanded] = useState(false);
+  const [fireLog] = useState<AutomationLogEntry[]>(() => getAutomationLog(businessId));
+
+  // User & Company Profile State (multi-company support)
+  // These read the BUSINESS record — never demo defaults. The old
+  // initializers fell back to a hardcoded 'Apex Commercial Systems' /
+  // '(555) 302-8491' and had no save path, so every login or reopen
+  // showed the fake profile again while services (read from the record)
+  // stayed correct. Blank here means "not on the record yet", never a guess.
+  const [companyName, setCompanyName] = useState(business?.name || currentUser?.organization || '');
+  const [companyPhone, setCompanyPhone] = useState(business?.contactPhone || '');
+  const [dispatchEmail, setDispatchEmail] = useState(business?.contactEmail || currentUser?.email || '');
+  const [is24x7Emergency, setIs24x7Emergency] = useState(true);
+
+  // ---- My Profile (editable name, contact info, profile picture) ----
+  // A member's own contact info lives on their OWN record: the team
+  // roster entry when one exists, else the signed-in user record. It
+  // is NEVER the company's contact info — prefilling these boxes from
+  // the business record showed every team member the owner's phone,
+  // email, and picture. Blank here means "never filled in", not "use
+  // the company's". The picture is likewise the person's own avatar.
+  const ownMember = (business?.members || []).find(
+    (m) => (m.email || '').toLowerCase() === (currentUser?.email || '').toLowerCase()
+  );
+  const ownPhone = ownMember?.phone || currentUser?.phone || '';
+  const ownContactEmail = ownMember?.contactEmail || currentUser?.contactEmail || '';
+  const [profileName, setProfileName] = useState(currentUser?.fullName || '');
+  const [profilePhone, setProfilePhone] = useState(ownPhone);
+  const [profileContactEmail, setProfileContactEmail] = useState(ownContactEmail);
+  const [profilePicture, setProfilePicture] = useState(currentUser?.avatar || '');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const profileFileRef = useRef<HTMLInputElement | null>(null);
+  // When a different account/business loads, reset the form to its values.
+  useEffect(() => {
+    setProfileName(currentUser?.fullName || '');
+    setProfilePhone(ownPhone);
+    setProfileContactEmail(ownContactEmail);
+    setProfilePicture(currentUser?.avatar || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [business?.id, currentUser?.email]);
+
+  // ---- Company contact (owner only; the info customers see) ----
+  // Positive proof only, mirroring the team backfill guard: a roster
+  // entry with role 'owner', or — for businesses created before teams
+  // existed — a match against the business's own owner identity. An
+  // empty roster alone proves nothing, so nobody is promoted by it.
+  const isBusinessOwner = (() => {
+    if (ownMember) return ownMember.role === 'owner';
+    const myEmail = (currentUser?.email || '').toLowerCase();
+    if (!myEmail) return false;
+    const ownerIdentities = [
+      (business?.contactEmail || '').toLowerCase(),
+      ((business as unknown as { ownerEmail?: string } | null)?.ownerEmail || '').toLowerCase(),
+    ].filter(Boolean);
+    return ownerIdentities.includes(myEmail) ||
+      (!!business?.ownerId && business.ownerId !== 'unassigned_owner' && business.ownerId === currentUser?.id);
+  })();
+  const [companyContactPhone, setCompanyContactPhone] = useState(business?.contactPhone || '');
+  const [companyContactEmail, setCompanyContactEmail] = useState(business?.contactEmail || '');
+  const [companyContactSaving, setCompanyContactSaving] = useState(false);
+  const [companyContactError, setCompanyContactError] = useState<string | null>(null);
+  // When a different business loads, reset the company form to its values.
+  useEffect(() => {
+    setCompanyContactPhone(business?.contactPhone || '');
+    setCompanyContactEmail(business?.contactEmail || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [business?.id]);
+
+  // When a different account/business loads, reset the Company Profile
+  // card to the business record's values — same pattern as the forms
+  // above. Without this, the card kept whatever it first rendered with.
+  useEffect(() => {
+    setCompanyName(business?.name || currentUser?.organization || '');
+    setCompanyPhone(business?.contactPhone || '');
+    setDispatchEmail(business?.contactEmail || currentUser?.email || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [business?.id, currentUser?.email]);
+
+  const handleSaveCompanyContact = async () => {
+    if (companyContactEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(companyContactEmail.trim())) {
+      setCompanyContactError('That company email does not look right.');
+      return;
+    }
+    if (!onUpdateCompanyContact) { setCompanyContactError('Company contact saving is not available right now.'); return; }
+    setCompanyContactSaving(true);
+    setCompanyContactError(null);
+    try {
+      await onUpdateCompanyContact({
+        contactPhone: companyContactPhone.trim(),
+        contactEmail: companyContactEmail.trim(),
+      });
+      showToast('Company contact saved!');
+    } catch (e: any) {
+      setCompanyContactError(e?.message || 'Could not save the company contact. Please try again.');
+    } finally {
+      setCompanyContactSaving(false);
+    }
+  };
+
+  const [companyProfileSaving, setCompanyProfileSaving] = useState(false);
+  const [companyProfileError, setCompanyProfileError] = useState<string | null>(null);
+  const handleSaveCompanyProfile = async () => {
+    if (dispatchEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(dispatchEmail.trim())) {
+      setCompanyProfileError('That work order email does not look right.');
+      return;
+    }
+    if (!onUpdateCompanyProfile) { setCompanyProfileError('Company profile saving is not available right now.'); return; }
+    setCompanyProfileSaving(true);
+    setCompanyProfileError(null);
+    try {
+      await onUpdateCompanyProfile({
+        name: companyName.trim(),
+        contactPhone: companyPhone.trim(),
+        contactEmail: dispatchEmail.trim(),
+      });
+      showToast('Company profile saved!');
+    } catch (e: any) {
+      setCompanyProfileError(e?.message || 'Could not save the company profile. Please try again.');
+    } finally {
+      setCompanyProfileSaving(false);
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!profileName.trim()) { setProfileError('Please enter your name.'); return; }
+    if (profileContactEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profileContactEmail.trim())) {
+      setProfileError('That contact email does not look right.');
+      return;
+    }
+    if (!onUpdateProfile) { setProfileError('Profile saving is not available right now.'); return; }
+    setProfileSaving(true);
+    setProfileError(null);
+    try {
+      await onUpdateProfile({
+        fullName: profileName.trim(),
+        phone: profilePhone.trim(),
+        contactEmail: profileContactEmail.trim(),
+        profilePicture,
+      });
+      showToast('Profile saved!');
+    } catch (e: any) {
+      setProfileError(e?.message || 'Could not save your profile. Please try again.');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  // ---- Teach Your Team (business knowledge every AI agent reads) ----
+  const [knowledgeText, setKnowledgeText] = useState(business?.businessKnowledge || '');
+  const [knowledgeSaving, setKnowledgeSaving] = useState(false);
+  const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
+  // When a different business loads, reset the editor to its saved text.
+  useEffect(() => {
+    setKnowledgeText(business?.businessKnowledge || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [business?.id]);
+
+  const handleSaveKnowledge = async () => {
+    if (knowledgeText.length > MAX_BUSINESS_KNOWLEDGE_LENGTH) {
+      setKnowledgeError(`That's over the ${MAX_BUSINESS_KNOWLEDGE_LENGTH.toLocaleString()} character limit — please shorten it a little.`);
+      return;
+    }
+    if (!onUpdateBusinessKnowledge) { setKnowledgeError('Saving is not available right now.'); return; }
+    setKnowledgeSaving(true);
+    setKnowledgeError(null);
+    try {
+      await onUpdateBusinessKnowledge(knowledgeText);
+      showToast('Saved — your AI team will use this.');
+    } catch (e: any) {
+      setKnowledgeError(e?.message || 'Could not save. Please try again.');
+    } finally {
+      setKnowledgeSaving(false);
+    }
+  };
+
+  const handleProfilePhotoFile = async (file: File | null) => {
+    if (!file) { biometricService.clearFilePickerFlag(); return; }
+    try {
+      const dataUrl = await downscaleImageFile(file);
+      setProfilePicture(dataUrl);
+      setProfileError(null);
+      showToast('Photo chosen — tap Save profile to keep it.');
+    } catch (e: any) {
+      setProfileError(e?.message || 'Could not use that photo.');
+    } finally {
+      biometricService.clearFilePickerFlag();
+    }
+  };
+
+  // App Agents State
+  const [autonomyMode, setAutonomyMode] = useState<'autonomous' | 'supervised'>(business?.autonomyMode || 'autonomous');
+  // When a different business loads, reset to its saved mode.
+  useEffect(() => {
+    setAutonomyMode(business?.autonomyMode || 'autonomous');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [business?.id]);
+  const [agentTone, setAgentTone] = useState<'strategic' | 'customer' | 'technical'>('strategic');
+  const [customEmployees, setCustomEmployees] = useState<CustomAIEmployee[]>(() =>
+    employeeCustomizationService.getEmployees(businessId || '')
+  );
+  const [selectedEmployeeForCustomizer, setSelectedEmployeeForCustomizer] = useState<CustomAIEmployee | null>(null);
+
+  // Custom Task Modal State
+  const [isAddingTask, setIsAddingTask] = useState(false);
+  const [newTaskName, setNewTaskName] = useState('');
+  const [newTaskDescription, setNewTaskDescription] = useState('');
+  const [saveToast, setSaveToast] = useState<string | null>(null);
+
+  // Device & Display State
+  const [cacheCleared, setCacheCleared] = useState(false);
+
+  const showToast = (msg: string) => {
+    setSaveToast(msg);
+    setTimeout(() => setSaveToast(null), 2500);
+  };
+
+  // Autonomy Mode: the toggle reads from the business record and saves back
+  // to it (server + Firestore), so the choice survives leaving the page.
+  // On a failed save the toggle flips back and the error is shown.
+  const handleAutonomyChange = async (mode: 'autonomous' | 'supervised') => {
+    const previous = autonomyMode;
+    setAutonomyMode(mode);
+    try {
+      await onUpdateAutonomyMode(mode);
+      showToast(mode === 'autonomous' ? 'Autonomy Mode: Full Autonomous active' : 'Autonomy Mode: Supervised Approval active');
+    } catch (e: any) {
+      setAutonomyMode(previous);
+      showToast(e?.message || 'Could not save that setting.');
+    }
+  };
+
+  const handleAddTask = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTaskName.trim()) return;
+    onAddCustomTask({
+      id: `task-custom-${Date.now()}`,
+      name: newTaskName,
+      description: newTaskDescription || 'Automated client operations workflow step',
+      isAutomated: true,
+      isCustom: true,
+    });
+    setNewTaskName('');
+    setNewTaskDescription('');
+    setIsAddingTask(false);
+    showToast('Custom automation rule activated!');
+  };
+
+  const ringerMode = notifPreferences.ringerMode || (
+    !notifPreferences.soundEnabled && !notifPreferences.vibrationEnabled ? 'silent' :
+    !notifPreferences.soundEnabled ? 'vibrate' : 'sound'
+  );
+
+  const handleClearCache = () => {
+    // Clean temporary operational cache
+    try {
+      sessionStorage.clear();
+      setCacheCleared(true);
+      showToast('Temporary query cache cleared safely!');
+      setTimeout(() => setCacheCleared(false), 3000);
+    } catch {
+      showToast('Cache cleared.');
+    }
+  };
+
+  // ---- Delete Account (Danger Zone) ----
+  // Two-step: warning screen, then type DELETE to enable the final button.
+  // Server delete first; local data is only wiped after the server confirms.
+  const [deleteStep, setDeleteStep] = useState<'idle' | 'warn' | 'confirm' | 'done'>('idle');
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
+  const [deleteInput, setDeleteInput] = useState('');
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteDeleting, setDeleteDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // ---- Team (people on this company account) ----
+  const [teamMembers, setTeamMembers] = useState<BusinessMember[]>([]);
+  const [teamInvites, setTeamInvites] = useState<TeamInvite[]>([]);
+  const [teamIsOwner, setTeamIsOwner] = useState(true);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteCreated, setInviteCreated] = useState<TeamInvite | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  const [leavingTeam, setLeavingTeam] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const teamBackfilledRef = useRef(false);
+
+  const loadTeam = async () => {
+    if (!businessId || !currentUser?.email) return;
+    try {
+      const roster = await teamService.getTeam(businessId, currentUser.email);
+      setTeamMembers(roster.members || []);
+      setTeamInvites(roster.invites || []);
+      setTeamIsOwner(roster.isOwner);
+      // A company created before teams existed has no member list yet.
+      // The first time its owner opens Team, record them as the owner so
+      // invites work. Members always arrive with a list, so this only
+      // ever runs for the creator.
+      // Backfill guard: an empty roster does NOT prove the current user
+      // is the creator — the roster is empty on restored businesses too,
+      // and backfilling a member as owner let a test account wipe the
+      // whole business from the Danger Zone. Only backfill on positive
+      // proof (contact email / owner email / owner id match). When the
+      // record has no owner identity at all, nobody is backfilled — no
+      // one becomes owner just by opening Team.
+      const ownerIdentities = [
+        (business?.contactEmail || '').toLowerCase(),
+        ((business as unknown as { ownerEmail?: string } | null)?.ownerEmail || '').toLowerCase(),
+      ].filter(Boolean);
+      const matchesOwnerIdentity =
+        ownerIdentities.includes((currentUser?.email || '').toLowerCase()) ||
+        (!!business?.ownerId && business.ownerId !== 'unassigned_owner' && business.ownerId === currentUser?.id);
+      if ((roster.members || []).length === 0 && !teamBackfilledRef.current && matchesOwnerIdentity) {
+        teamBackfilledRef.current = true;
+        const ownerMember: BusinessMember = {
+          userId: currentUser.id,
+          email: currentUser.email,
+          name: currentUser.fullName,
+          role: 'owner',
+          avatar: currentUser.avatar,
+          joinedAt: new Date().toISOString()
+        };
+        await apiFetch(`/api/business/${businessId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ members: [ownerMember] })
+        }).catch(() => null);
+        setTeamMembers([ownerMember]);
+        setTeamIsOwner(true);
+      }
+    } catch (e: any) {
+      setTeamError(e?.message || 'Could not load the team.');
+    }
+  };
+
+  useEffect(() => {
+    loadTeam();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId]);
+
+  const handleCreateInvite = async () => {
+    if (!businessId || !currentUser?.email) return;
+    setInviteBusy(true);
+    setTeamError(null);
+    setInviteCreated(null);
+    setCopiedCode(false);
+    try {
+      const invite = await teamService.createInvite(businessId, currentUser.email, inviteEmail.trim());
+      setInviteCreated(invite);
+      setInviteEmail('');
+      await loadTeam();
+    } catch (e: any) {
+      setTeamError(e?.message || 'Could not create that invite.');
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const handleCopyCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCode(true);
+    } catch { /* clipboard unavailable — the code is shown on screen */ }
+  };
+
+  const handleRevokeInvite = async (code: string) => {
+    if (!businessId || !currentUser?.email) return;
+    try {
+      await teamService.revokeInvite(businessId, currentUser.email, code);
+      await loadTeam();
+    } catch (e: any) {
+      setTeamError(e?.message || 'Could not cancel that invite.');
+    }
+  };
+
+  const handleRemoveMember = async (memberEmail: string) => {
+    if (!businessId || !currentUser?.email) return;
+    try {
+      await teamService.removeMember(businessId, currentUser.email, memberEmail);
+      // Device-local cleanup: on a shared device, the removed person's
+      // saved login + fingerprint link must go too, or fingerprint
+      // sign-in brings them straight back. Only touches data for the
+      // removed email — nothing else on this device is affected.
+      try {
+        authService.removeRegisteredUser(memberEmail);
+      } catch { /* no saved login for them on this device */ }
+      try {
+        const enrolled = biometricService.getEnrolledInfo();
+        if (enrolled.enrolled && (enrolled.userEmail || '').toLowerCase() === memberEmail.toLowerCase()) {
+          biometricService.unenrollBiometrics();
+        }
+      } catch { /* no fingerprint link for them on this device */ }
+      setRemoveTarget(null);
+      await loadTeam();
+    } catch (e: any) {
+      setTeamError(e?.message || 'Could not remove that person.');
+    }
+  };
+
+  const handleLeaveTeam = async () => {
+    if (!onLeaveTeam) return;
+    setLeavingTeam(true);
+    setLeaveError(null);
+    try {
+      await onLeaveTeam();
+    } catch (e: any) {
+      setLeaveError(e?.message || 'Could not leave the team.');
+      setLeavingTeam(false);
+    }
+  };
+  // Google-only sign-ins have no password, so no password field is shown for them.
+  // Everyone else must type their account password — it is checked before
+  // anything is deleted, so a deleted account can never come back.
+  const deleteNeedsPassword = !auth.currentUser
+    || auth.currentUser.providerData.some((p) => p.providerId === 'password');
+
+  const handleDeleteAccount = async () => {
+    if (deleteInput !== 'DELETE' || deleteDeleting) return;
+    if (deleteNeedsPassword && !deletePassword) {
+      setDeleteError('Please type your account password to confirm deletion.');
+      return;
+    }
+    setDeleteDeleting(true);
+    setDeleteError(null);
+    setDeleteNotice(null);
+    try {
+      const result = await deleteAccount(businessId || '', { password: deletePassword });
+      setDeletePassword('');
+      // The delete completed — but the Firebase sign-in may not have
+      // been removable (e.g. no Firebase session to delete from, or the
+      // Firebase password drifted). That is reported, never hidden.
+      if (result.firebaseDeleteNote) {
+        setDeleteNotice(result.firebaseDeleteNote);
+      }
+      setDeleteStep('done');
+      // Reload to a clean login screen — guarantees no stale in-memory data.
+      setTimeout(() => {
+        window.location.reload();
+      }, 1800);
+    } catch (err: any) {
+      if (isReauthRequired(err)) {
+        setDeleteError('Your sign-in is too old for this step. Please log out, log back in, then try deleting again.');
+      } else {
+        setDeleteError(err?.message || 'Could not delete the account. Please try again.');
+      }
+      // Stay on the confirm screen so the owner can retry. Local data is untouched.
+    } finally {
+      setDeleteDeleting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4 pb-8 px-3 sm:px-4 pt-2 max-w-full overflow-x-hidden">
+      {/* Toast Notification */}
+      {saveToast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-[#22ec72] text-black px-4 py-2 rounded-full font-extrabold text-xs shadow-xl flex items-center gap-2 animate-in fade-in slide-in-from-top-4">
+          <Check className="w-4 h-4" />
+          <span>{saveToast}</span>
+        </div>
+      )}
+
+      {/* Header — as in the reference: Settings / Customize your experience. */}
+      <div className="px-1 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="text-xl font-extrabold text-white tracking-tight">Settings</h2>
+          <p className="text-xs text-zinc-400 mt-0.5">Customize your experience</p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onOpenNotifPrefsModal}
+          className="px-2.5 py-1.5 rounded-xl bg-[#0c1211] border border-[#1d2b26] text-xs font-bold text-zinc-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 min-h-[36px]"
+        >
+          <Bell className="w-3.5 h-3.5 text-[#22ec72]" />
+          <span>Alerts</span>
+        </button>
+      </div>
+
+      {/* 3-Section Segmented Navigation Bar */}
+      <div className="grid grid-cols-3 p-1 rounded-2xl bg-[#0c1211] border border-[#1d2b26] text-xs font-bold shadow-md">
+        <button
+          type="button"
+          onClick={() => setActiveSection('user')}
+          className={`min-h-[48px] py-2 px-1 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 truncate ${
+            activeSection === 'user'
+              ? 'bg-[#22ec72]/15 text-[#22ec72] border border-[#22ec72]/30 shadow'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <UserIcon className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">User & Org</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('agents')}
+          className={`min-h-[48px] py-2 px-1 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 truncate ${
+            activeSection === 'agents'
+              ? 'bg-[#22ec72]/15 text-[#22ec72] border border-[#22ec72]/30 shadow'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Bot className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">AI Agents</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('device')}
+          className={`min-h-[48px] py-2 px-1 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 truncate ${
+            activeSection === 'device'
+              ? 'bg-[#22ec72]/15 text-[#22ec72] border border-[#22ec72]/30 shadow'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Smartphone className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Device</span>
+        </button>
+      </div>
+
+      {/* ============================================================== */}
+      {/* SECTION 1: USER & COMPANY SETTINGS */}
+      {/* ============================================================== */}
+      {activeSection === 'user' && (
+        <div className="space-y-4 animate-in fade-in duration-200">
+          {/* Current Operator Profile Card */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono text-zinc-400 uppercase tracking-wider">
+                Logged In Operator
+              </span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-[#22ec72]/10 text-[#22ec72] border border-[#22ec72]/30 font-mono font-bold uppercase">
+                Active Session
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <img
+                  src={currentUser?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80'}
+                  alt="Operator"
+                  className="w-12 h-12 rounded-2xl object-cover border border-[#22ec72]/50 shrink-0"
+                />
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-white truncate">
+                    {currentUser?.fullName || 'Lead Operator'}
+                  </div>
+                  <div className="text-xs text-[#22ec72] font-mono">
+                    {currentUser?.role || 'Operations Lead'}
+                  </div>
+                  <div className="text-xs text-zinc-400 font-mono truncate">
+                    {currentUser?.email || 'rcsoulutions@gmail.com'}
+                  </div>
+                </div>
+              </div>
+
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="min-h-[48px] px-3 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0"
+                  title="Log Out of this account"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Log Out</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* App Guide — the section list, expanded inline in Settings.
+              Tapping a section navigates straight to that real screen;
+              nothing is ever laid over the screen. The Dashboard
+              "Get started" checklist can also be brought back here. */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-2">
+            <button
+              type="button"
+              onClick={() => {
+                haptic.light();
+                setGuideExpanded((v) => !v);
+              }}
+              className="min-h-[48px] w-full flex items-center gap-3 text-left transition cursor-pointer"
+            >
+              <span className="w-10 h-10 rounded-2xl bg-[#22ec72]/10 border border-[#22ec72]/30 flex items-center justify-center shrink-0">
+                <BookOpen className="w-5 h-5 text-[#22ec72]" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-bold text-white">App Guide</span>
+                <span className="block text-xs text-zinc-400">
+                  Every section of the app — tap one to go straight there.
+                </span>
+              </span>
+              <ChevronRight
+                className={`w-4 h-4 text-zinc-500 shrink-0 transition-transform ${guideExpanded ? 'rotate-90' : ''}`}
+              />
+            </button>
+            {guideExpanded && (
+              <div className="space-y-1.5 pt-1">
+                {GET_STARTED_ITEMS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      haptic.light();
+                      onNavigateTab?.(item.tab);
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-[#05090a]/60 border border-[#1d2b26] hover:border-[#22ec72]/40 text-left transition cursor-pointer min-h-[44px]"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-bold text-white truncate">{item.title}</span>
+                      <span className="block text-xs text-zinc-400 truncate">{item.where}</span>
+                    </span>
+                    <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
+            {onShowGetStartedChecklist && (
+              <button
+                type="button"
+                onClick={() => {
+                  haptic.light();
+                  onShowGetStartedChecklist();
+                  onNavigateTab?.('dashboard');
+                }}
+                className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-[#05090a] text-white border border-[#1d2b26] text-sm font-bold transition cursor-pointer"
+              >
+                Show the Get started checklist again
+              </button>
+            )}
+          </div>
+
+          {/* My Profile — editable name, contact info, profile picture */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3.5">
+            <div className="flex items-center gap-2">
+              <UserIcon className="w-4 h-4 text-[#22ec72]" />
+              <h3 className="text-xs font-bold text-white uppercase tracking-wider">My Profile</h3>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <img
+                src={resolveProfilePicture(profilePicture, currentUser?.avatar || '')}
+                alt="Your profile picture"
+                className="w-16 h-16 rounded-2xl object-cover border border-[#22ec72]/50 shrink-0"
+              />
+              <div className="min-w-0">
+                <p className="text-xs text-white font-bold truncate">{profileName || 'Your name'}</p>
+                <p className="text-xs text-zinc-400">Pick a picture or upload your own photo.</p>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs text-zinc-400 font-mono mb-1.5">Choose a picture:</p>
+              <div className="flex gap-2 flex-wrap">
+                {DEFAULT_PROFILE_PICTURES.map((pic) => {
+                  const value = `default:${pic.id}`;
+                  const selected = profilePicture === value;
+                  return (
+                    <button
+                      key={pic.id}
+                      type="button"
+                      title={pic.label}
+                      onClick={() => { setProfilePicture(value); setProfileError(null); }}
+                      className={`min-h-[48px] w-10 h-10 rounded-xl overflow-hidden border-2 transition cursor-pointer ${selected ? 'border-[#22ec72]' : 'border-transparent'}`}
+                    >
+                      <img src={defaultPictureDataUrl(pic.id)} alt={pic.label} className="w-full h-full object-cover" />
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => { biometricService.notifyFilePickerOpened(); profileFileRef.current?.click(); }}
+                  className="min-h-[48px] h-10 px-3 rounded-xl bg-[#05090a] hover:bg-[#1d2b26] border border-zinc-700 text-xs font-bold text-zinc-200 transition cursor-pointer"
+                >
+                  Upload a photo
+                </button>
+              </div>
+              <input
+                ref={profileFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0] || null; e.target.value = ''; handleProfilePhotoFile(f); }}
+              />
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-xs text-zinc-400 font-mono block mb-1">Full name:</label>
+                <input
+                  type="text"
+                  value={profileName}
+                  onChange={(e) => setProfileName(e.target.value)}
+                  placeholder="Your full name"
+                  className="w-full bg-[#05090a] border border-[#1d2b26] focus:border-[#22ec72] rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400 font-mono block mb-1">Phone:</label>
+                <input
+                  type="tel"
+                  value={profilePhone}
+                  onChange={(e) => setProfilePhone(e.target.value)}
+                  placeholder="(555) 123-4567"
+                  className="w-full bg-[#05090a] border border-[#1d2b26] focus:border-[#22ec72] rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400 font-mono block mb-1">Contact email:</label>
+                <input
+                  type="email"
+                  value={profileContactEmail}
+                  onChange={(e) => setProfileContactEmail(e.target.value)}
+                  placeholder="you@company.com"
+                  className="w-full bg-[#05090a] border border-[#1d2b26] focus:border-[#22ec72] rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                />
+                <p className="text-xs text-zinc-500 mt-1">Your own contact email. Changing this never changes the company's contact info. Your login email stays the same.</p>
+              </div>
+            </div>
+
+            {profileError && <p className="text-xs text-red-300">{profileError}</p>}
+            <button
+              type="button"
+              onClick={handleSaveProfile}
+              disabled={profileSaving}
+              className="min-h-[48px] px-3 py-2 rounded-xl bg-[#22ec72] hover:bg-[#22ec72] disabled:bg-zinc-800 disabled:text-zinc-500 text-xs font-bold text-black transition cursor-pointer"
+            >
+              {profileSaving ? 'Saving…' : 'Save profile'}
+            </button>
+          </div>
+
+          {/* Company contact — owner only. The phone and email customers
+              see. This is the ONLY place that edits the company's contact
+              info; My Profile above edits only the signed-in person's
+              own info and never touches these fields. */}
+          {isBusinessOwner && (
+            <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3.5">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-[#22ec72]" />
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Company contact</h3>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30 font-mono font-bold uppercase">
+                  Owner only
+                </span>
+              </div>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                The phone and email customers see for this company. Only you can change these.
+              </p>
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="text-xs text-zinc-400 font-mono block mb-1">Company phone:</label>
+                  <input
+                    type="tel"
+                    value={companyContactPhone}
+                    onChange={(e) => setCompanyContactPhone(e.target.value)}
+                    placeholder="(555) 123-4567"
+                    className="w-full bg-[#05090a] border border-[#1d2b26] focus:border-[#22ec72] rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-zinc-400 font-mono block mb-1">Company email:</label>
+                  <input
+                    type="email"
+                    value={companyContactEmail}
+                    onChange={(e) => setCompanyContactEmail(e.target.value)}
+                    placeholder="hello@company.com"
+                    className="w-full bg-[#05090a] border border-[#1d2b26] focus:border-[#22ec72] rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                  />
+                </div>
+              </div>
+              {companyContactError && <p className="text-xs text-red-300">{companyContactError}</p>}
+              <button
+                type="button"
+                onClick={handleSaveCompanyContact}
+                disabled={companyContactSaving}
+                className="min-h-[48px] px-3 py-2 rounded-xl bg-[#22ec72] hover:bg-[#22ec72] disabled:bg-zinc-800 disabled:text-zinc-500 text-xs font-bold text-black transition cursor-pointer"
+              >
+                {companyContactSaving ? 'Saving…' : 'Save company contact'}
+              </button>
+            </div>
+          )}
+
+          {/* Teach Your Team — business knowledge every AI agent reads */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3.5">
+            <div className="flex items-center gap-2">
+              <GraduationCap className="w-4 h-4 text-[#22ec72]" />
+              <h3 className="text-xs font-bold text-white uppercase tracking-wider">Teach Your Team</h3>
+            </div>
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Write what your business knows — prices, policies, common questions — and your whole AI team will use it: the assistants in chat and your receptionist on calls. Write it once; they all read the same page.
+            </p>
+            <textarea
+              value={knowledgeText}
+              onChange={(e) => setKnowledgeText(e.target.value)}
+              rows={10}
+              maxLength={MAX_BUSINESS_KNOWLEDGE_LENGTH}
+              autoComplete="off"
+              placeholder={'Services & prices\nWhat you offer and what it costs.\n\nOur policies\nHow you handle deposits, cancellations, warranties…\n\nCommon questions & answers\nThe things customers ask you every week.\n\nGood to know\nAnything else your team should know.'}
+              className="w-full bg-[#0c1211] border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-[#22ec72] leading-relaxed"
+            />
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-zinc-500">{knowledgeText.length.toLocaleString()} / {MAX_BUSINESS_KNOWLEDGE_LENGTH.toLocaleString()} characters</span>
+              <button
+                type="button"
+                onClick={handleSaveKnowledge}
+                disabled={knowledgeSaving}
+                className="min-h-[48px] px-3 py-2 rounded-xl bg-[#22ec72] hover:bg-[#22ec72] disabled:bg-zinc-800 disabled:text-zinc-500 text-xs font-bold text-black transition cursor-pointer"
+              >
+                {knowledgeSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            {knowledgeError && <p className="text-xs text-red-300">{knowledgeError}</p>}
+          </div>
+
+          {/* Company Profile (Multi-Company Configuration) */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-[#22ec72]" />
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Company / Organization Profile
+                </h3>
+              </div>
+              {onReopenOnboarding && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    haptic.light();
+                    onReopenOnboarding();
+                  }}
+                  className="min-h-[48px] px-2.5 py-1 rounded-xl bg-[#22ec72]/10 hover:bg-[#22ec72]/20 text-[#22ec72] border border-[#22ec72]/30 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Re-detect Industry</span>
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-xs text-zinc-400 font-mono block mb-1">Company Business Name:</label>
+                <input
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  placeholder="e.g. Acme Services"
+                  className="w-full bg-[#05090a] border border-[#1d2b26] focus:border-[#22ec72] rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="p-2.5 rounded-xl bg-[#05090a]/60 border border-[#1d2b26] flex flex-col justify-between">
+                  <div>
+                    <label className="text-xs text-zinc-400 font-mono block mb-0.5">Active Industry:</label>
+                    <div className="text-xs font-bold text-[#22ec72] truncate">{industryName}</div>
+                  </div>
+                  {onReopenOnboarding && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        haptic.light();
+                        onReopenOnboarding();
+                      }}
+                      className="min-h-[48px] mt-1.5 text-xs text-zinc-400 hover:text-white flex items-center gap-1 font-mono transition cursor-pointer"
+                    >
+                      <Sparkles className="w-3 h-3 text-[#22ec72]" />
+                      <span>Re-tune with AI</span>
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-xs text-zinc-400 font-mono block mb-1">Dispatch Hotline Phone:</label>
+                  <input
+                    type="text"
+                    value={companyPhone}
+                    onChange={(e) => setCompanyPhone(e.target.value)}
+                    placeholder="(555) 555-0100"
+                    className="w-full bg-[#05090a] border border-[#1d2b26] focus:border-[#22ec72] rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-zinc-400 font-mono block mb-1">Work Order Routing Email:</label>
+                <input
+                  type="email"
+                  value={dispatchEmail}
+                  onChange={(e) => setDispatchEmail(e.target.value)}
+                  placeholder="dispatch@company.com"
+                  className="w-full bg-[#05090a] border border-[#1d2b26] focus:border-[#22ec72] rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                />
+              </div>
+
+              {isBusinessOwner && (
+                <>
+                  {companyProfileError && <p className="text-xs text-red-300">{companyProfileError}</p>}
+                  <button
+                    type="button"
+                    onClick={handleSaveCompanyProfile}
+                    disabled={companyProfileSaving}
+                    className="min-h-[48px] px-3 py-2 rounded-xl bg-[#22ec72] hover:bg-[#22ec72] disabled:bg-zinc-800 disabled:text-zinc-500 text-xs font-bold text-black transition cursor-pointer"
+                  >
+                    {companyProfileSaving ? 'Saving…' : 'Save company profile'}
+                  </button>
+                </>
+              )}
+
+              {/* Service Catalog & Proactive AI Monitor Card */}
+              <div className="p-3 rounded-xl bg-[#05090a]/60 border border-[#1d2b26] space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Wrench className="w-3.5 h-3.5 text-[#22ec72]" />
+                    <span className="text-xs font-bold text-white">Offered Services & Capabilities</span>
+                  </div>
+                  {onOpenServiceManager && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        haptic.light();
+                        onOpenServiceManager();
+                      }}
+                      className="min-h-[48px] px-2 py-1 rounded-lg bg-[#22ec72]/10 hover:bg-[#22ec72]/20 text-[#22ec72] border border-[#22ec72]/30 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Manage Services</span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1 pt-0.5">
+                  {(asStringList(businessServices).length > 0 ? asStringList(businessServices) : ['General Commercial Services']).map((svc, idx) => (
+                    <span key={idx} className="text-xs px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-300 font-mono">
+                      {svc}
+                    </span>
+                  ))}
+                </div>
+
+                {/* Proactive AI Industry Suggestion Inside Settings */}
+                {proactiveSuggestion && onReviewSuggestion && (
+                  <div className="mt-2 p-2.5 rounded-xl bg-gradient-to-r from-[#22ec72]/15 via-[#22ec72]/10 to-zinc-900/40 border border-[#22ec72]/40 animate-in fade-in duration-300">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2">
+                        <div className="p-1.5 rounded-lg bg-[#22ec72]/20 text-[#22ec72] shrink-0 mt-0.5">
+                          <Sparkles className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-extrabold text-white">
+                              AI Monitor Optimization Available
+                            </span>
+                            <span className="text-xs px-1.5 py-0.2 rounded bg-[#22ec72]/20 text-[#22ec72] font-mono font-bold">
+                              {Math.round(asScore(proactiveSuggestion.confidence) || 95)}% Match
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-300 mt-0.5 leading-snug">
+                            Services indicate specialized <strong className="text-[#22ec72]">{asText(proactiveSuggestion.suggestedPresetName)}</strong> workflows rather than current profile.
+                          </p>
+                        </div>
+                      </div>
+                      {onDismissSuggestion && (
+                        <button aria-label="Dismiss suggestion"
+                          type="button"
+                          onClick={() => {
+                            haptic.light();
+                            onDismissSuggestion();
+                          }}
+                          className="min-h-[48px] text-zinc-500 hover:text-zinc-300 p-1 rounded-lg transition"
+                          title="Dismiss suggestion"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-[#22ec72]/20 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          haptic.selection();
+                          onReviewSuggestion();
+                        }}
+                        className="min-h-[48px] px-3 py-1 rounded-lg bg-[#22ec72] hover:bg-[#22ec72] text-black text-xs font-extrabold flex items-center gap-1 transition cursor-pointer shadow-sm shadow-[#22ec72]/20"
+                      >
+                        <span>Review & Upgrade Preset</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-xs text-zinc-500 italic">
+                  AI Context Monitor automatically suggests optimized industry presets as you add or alter services.
+                </p>
+              </div>
+
+              <label className="flex items-center justify-between p-2.5 rounded-xl bg-[#05090a]/60 border border-[#1d2b26] cursor-pointer">
+                <div>
+                  <span className="text-xs font-semibold text-white block">24/7 Emergency Dispatch Readiness</span>
+                  <span className="text-xs text-zinc-400">Routes off-hours voice AI calls directly to emergency on-call technicians</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={is24x7Emergency}
+                  onChange={(e) => setIs24x7Emergency(e.target.checked)}
+                  className="rounded bg-black border-zinc-700 text-[#22ec72] focus:ring-0 shrink-0"
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* Team — people on this company account */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-[#22ec72]" />
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Your Team</h3>
+              </div>
+              {onOpenTeamChat && businessId && (
+                <button
+                  type="button"
+                  onClick={onOpenTeamChat}
+                  className="min-h-[48px] px-3 py-2 rounded-xl bg-[#22ec72] hover:bg-[#22ec72] text-black text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Open Team Chat</span>
+                </button>
+              )}
+            </div>
+
+            {!businessId && (
+              <p className="text-xs text-zinc-400">Finish setting up your company first, then you can invite your team.</p>
+            )}
+            {teamError && (
+              <p className="text-xs text-red-300">{teamError}</p>
+            )}
+
+            {/* Member list */}
+            {teamMembers.length > 0 && (
+              <div className="space-y-1.5">
+                {teamMembers.map(m => {
+                  const isMe = m.email.toLowerCase() === (currentUser?.email || '').toLowerCase();
+                  return (
+                    <div key={m.email.toLowerCase()} className="flex items-center gap-2.5 p-2 rounded-xl bg-[#05090a]/60 border border-[#1d2b26]">
+                      <div className="w-8 h-8 rounded-full bg-[#22ec72]/20 text-[#22ec72] border border-[#22ec72]/30 flex items-center justify-center font-bold text-xs shrink-0">
+                        {(m.name || m.email || '?').trim().charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-white truncate">
+                          {m.name} {isMe && <span className="text-[#22ec72]">(You)</span>}
+                        </div>
+                        <div className="text-xs text-zinc-400 truncate">{m.email}</div>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-bold border shrink-0 ${m.role === 'owner' ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-zinc-800 text-zinc-300 border-zinc-700'}`}>
+                        {m.role === 'owner' ? 'Owner' : 'Team member'}
+                      </span>
+                      {teamIsOwner && !isMe && m.role !== 'owner' && (
+                        removeTarget === m.email.toLowerCase() ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMember(m.email)}
+                            className="min-h-[48px] px-2 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold shrink-0 cursor-pointer"
+                          >
+                            Remove?
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setRemoveTarget(m.email.toLowerCase())}
+                            className="min-h-[48px] px-2 py-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-300 text-xs font-bold shrink-0 cursor-pointer"
+                          >
+                            Remove
+                          </button>
+                        )
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Owner: invite form */}
+            {teamIsOwner && businessId && (
+              <div className="space-y-2 pt-1">
+                <p className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <UserPlus className="w-3.5 h-3.5 text-[#22ec72]" />
+                  <span>Invite someone to your team</span>
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    placeholder="Their email (optional — leave empty for anyone with the code)"
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[#05090a] border border-[#1d2b26] text-xs text-white placeholder:text-zinc-500 outline-none focus:border-[#22ec72]"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCreateInvite}
+                    disabled={inviteBusy}
+                    className="min-h-[48px] px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold text-white transition cursor-pointer shrink-0"
+                  >
+                    {inviteBusy ? 'Making…' : 'Make invite code'}
+                  </button>
+                </div>
+                {inviteCreated && (
+                  <div className="p-3 rounded-xl bg-[#22ec72]/10 border border-[#22ec72]/30 space-y-1.5">
+                    <p className="text-xs text-zinc-300">Share this code with your team member. They enter it on the Join a Company screen.</p>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-extrabold text-lg tracking-[0.25em] text-[#22ec72]">{inviteCreated.code}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyCode(inviteCreated.code)}
+                        className="min-h-[48px] px-2 py-1 rounded-lg bg-zinc-800 text-xs font-bold text-white flex items-center gap-1 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3" />
+                        <span>{copiedCode ? 'Copied!' : 'Copy'}</span>
+                      </button>
+                    </div>
+                    <p className="text-xs text-zinc-400">
+                      {inviteCreated.email ? `Only ${inviteCreated.email} can use it. ` : ''}It works for 7 days and can only be used once.
+                    </p>
+                  </div>
+                )}
+                {teamInvites.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-bold text-zinc-400">Waiting invites</p>
+                    {teamInvites.map(inv => (
+                      <div key={inv.code} className="flex items-center gap-2 p-2 rounded-xl bg-[#05090a]/60 border border-[#1d2b26]">
+                        <span className="font-mono font-bold text-xs text-white tracking-widest">{inv.code}</span>
+                        <span className="text-xs text-zinc-400 flex-1 truncate">{inv.email || 'Anyone with the code'}</span>
+                        <span className="text-xs text-zinc-500 shrink-0">Expires {new Date(inv.expiresAt).toLocaleDateString()}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRevokeInvite(inv.code)}
+                          className="min-h-[48px] px-2 py-1 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-300 text-xs font-bold shrink-0 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Member: leave the team */}
+            {!teamIsOwner && businessId && onLeaveTeam && (
+              <div className="pt-1 space-y-2">
+                <p className="text-xs text-zinc-400">You are on this team as a team member. Leaving removes you from the company and signs you out.</p>
+                {leaveError && <p className="text-xs text-red-300">{leaveError}</p>}
+                <button
+                  type="button"
+                  onClick={handleLeaveTeam}
+                  disabled={leavingTeam}
+                  className="min-h-[48px] px-3 py-2 rounded-xl bg-transparent hover:bg-red-500/10 border border-red-800 text-xs font-bold text-red-400 transition cursor-pointer"
+                >
+                  {leavingTeam ? 'Leaving…' : 'Leave team'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Biometric settings card removed (Stage 2 audit L2): the
+              BiometricSettingsCard component was deleted with the rest of
+              the dead biometric UI. Biometrics stay removed. */}
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* SECTION 2: APP AGENTS SETTINGS */}
+      {/* ============================================================== */}
+      {activeSection === 'agents' && (
+        <div className="space-y-4 animate-in fade-in duration-200">
+          {/* Autonomy Mode Selector */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Bot className="w-4 h-4 text-[#22ec72]" />
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Multi-Agent Autonomy Mode
+                </h3>
+              </div>
+              <span className="text-xs text-zinc-400 font-mono">Operations Policy</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => handleAutonomyChange('autonomous')}
+                className={`min-h-[48px] p-3 rounded-xl border text-left transition cursor-pointer ${
+                  autonomyMode === 'autonomous'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-white'
+                    : 'bg-[#05090a]/60 border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold">Autonomous</span>
+                  <Zap className="w-3.5 h-3.5 text-[#22ec72]" />
+                </div>
+                <p className="text-xs text-zinc-400">
+                  Agents route calls, draft quotes, and assign technicians automatically within business thresholds.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleAutonomyChange('supervised')}
+                className={`min-h-[48px] p-3 rounded-xl border text-left transition cursor-pointer ${
+                  autonomyMode === 'supervised'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-white'
+                    : 'bg-[#05090a]/60 border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold">Supervised</span>
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                </div>
+                <p className="text-xs text-zinc-400">
+                  All job assignments, client invoices, and emergency dispatches require operator 1-tap approval.
+                </p>
+              </button>
+            </div>
+          </div>
+
+          {/* Auto-Dispatch Threshold */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Sliders className="w-4 h-4 text-[#22ec72]" />
+                <span>Job Auto-Dispatch Threshold</span>
+              </span>
+              <span className="text-xs text-[#22ec72] font-mono font-bold uppercase">
+                Active: {autoDispatchThreshold}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => onUpdateAutoDispatchThreshold('all')}
+                className={`min-h-[48px] p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                  autoDispatchThreshold === 'all'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-white font-bold'
+                    : 'bg-[#05090a]/60 border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <div>All Work Orders</div>
+                <div className="text-xs text-zinc-500">Auto-routes all incoming requests</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onUpdateAutoDispatchThreshold('critical')}
+                className={`min-h-[48px] p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                  autoDispatchThreshold === 'critical'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-white font-bold'
+                    : 'bg-[#05090a]/60 border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <div>Critical Emergency Only</div>
+                <div className="text-xs text-zinc-500">Only dispatches priority outages</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onUpdateAutoDispatchThreshold('high')}
+                className={`min-h-[48px] p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                  autoDispatchThreshold === 'high'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-white font-bold'
+                    : 'bg-[#05090a]/60 border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <div>High Priority + Urgent</div>
+                <div className="text-xs text-zinc-500">Priority and critical tiers</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onUpdateAutoDispatchThreshold('manual')}
+                className={`min-h-[48px] p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                  autoDispatchThreshold === 'manual'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-white font-bold'
+                    : 'bg-[#05090a]/60 border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <div>Manual Approval Only</div>
+                <div className="text-xs text-zinc-500">Operators manually assign all</div>
+              </button>
+            </div>
+          </div>
+
+          {/* AI Employee Fleet & Job Customization */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Bot className="w-4 h-4 text-[#22ec72]" />
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                  AI Employee Fleet & Job Roles ({customEmployees.length})
+                </h3>
+              </div>
+              <span className="text-xs text-zinc-500 font-mono">1-Tap Customizer</span>
+            </div>
+            <p className="text-xs text-zinc-400">
+              Customize job responsibilities, operational boundaries, and escalation triggers for each AI specialist:
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto pr-1">
+              {customEmployees.slice(0, 8).map((emp) => (
+                <div
+                  key={emp.id}
+                  onClick={() => setSelectedEmployeeForCustomizer(emp)}
+                  className="p-3 rounded-xl bg-[#05090a]/60 border border-[#1d2b26] hover:border-[#22ec72]/40 transition cursor-pointer text-left flex items-center justify-between gap-2.5 group"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-bold text-white group-hover:text-[#22ec72] transition-colors truncate">
+                      {emp.name}
+                    </div>
+                    <div className="text-xs text-zinc-400 truncate">
+                      {emp.roleTitle}
+                    </div>
+                    <div className="text-xs text-zinc-500 font-mono mt-0.5">
+                      Autonomy: <span className="text-[#22ec72]">{emp.autonomyLevel || 'autonomous'}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedEmployeeForCustomizer(emp);
+                    }}
+                    className="min-h-[48px] px-2 py-1 rounded-lg bg-[#22ec72]/10 hover:bg-[#22ec72]/20 text-[#22ec72] text-xs font-bold border border-[#22ec72]/30 shrink-0 cursor-pointer"
+                  >
+                    Edit Job
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Automated Workflow Tasks & Rules */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-[#22ec72]" />
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Automated Workflow Rules
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddingTask(true)}
+                className="min-h-[48px] px-2 py-1 rounded-lg bg-[#22ec72] hover:bg-[#22ec72] text-black text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Add Rule</span>
+              </button>
+            </div>
+
+            {/* Master automation switch */}
+            <div className="p-3.5 rounded-2xl bg-[#0c1211] border border-[#22ec72]/30 space-y-1">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-extrabold text-white flex items-center gap-1.5">
+                    <Zap className="w-4 h-4 text-[#22ec72]" />
+                    Automation Engine
+                  </div>
+                  <div className="text-xs text-zinc-400">
+                    {automationMasterOn
+                      ? 'Live — your rules are running.'
+                      : 'Paused — nothing will fire until you turn it back on.'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onToggleMaster(!automationMasterOn)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    automationMasterOn ? 'bg-[#22ec72]' : 'bg-zinc-800'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-black shadow transition duration-200 ease-in-out ${
+                      automationMasterOn ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Automation Task List with Start / Pause / Resume / Reset */}
+            <div className="space-y-2">
+              {automationTasks.map((task) => {
+                const live = automationMasterOn && task.isAutomated && !task.paused;
+                const RuleIcon = ruleIcon(task.id);
+                return (
+                <div
+                  key={task.id}
+                  className={`p-3 rounded-xl bg-[#05090a]/60 border ${live ? 'border-[#1d2b26]' : 'border-[#1d2b26]/40 opacity-70'} space-y-2`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span className="p-1.5 rounded-lg bg-[#22ec72]/10 text-[#22ec72] shrink-0">
+                          <RuleIcon className="w-3.5 h-3.5" />
+                        </span>
+                        <span className="truncate min-w-0">{task.name}</span>
+                        {task.isCustom && (
+                          <span className="shrink-0 text-xs px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 font-mono">
+                            CUSTOM
+                          </span>
+                        )}
+                        {live && (
+                          <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full bg-[#22ec72]/10 text-[#22ec72] border border-[#22ec72]/30 font-bold">
+                            RUNNING
+                          </span>
+                        )}
+                        {task.isAutomated && task.paused && (
+                          <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-bold">
+                            PAUSED
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-zinc-400 leading-snug">
+                        {task.description}
+                      </div>
+                      <div className="text-xs text-zinc-500 font-mono mt-0.5">
+                        Ran {task.runCount || 0}× • last {timeAgoShort(task.lastFiredAt)}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => onToggleAutomation(task.id, !task.isAutomated)}
+                      className={`min-h-[48px] relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        task.isAutomated ? 'bg-[#22ec72]' : 'bg-zinc-800'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-black shadow transition duration-200 ease-in-out ${
+                          task.isAutomated ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {task.paused ? (
+                      <button
+                        type="button"
+                        disabled={!task.isAutomated}
+                        onClick={() => onPauseAutomation(task.id, false)}
+                        className="min-h-[48px] px-2.5 py-1 rounded-lg bg-[#22ec72]/10 text-[#22ec72] border border-[#22ec72]/30 text-xs font-bold disabled:opacity-40"
+                      >
+                        Resume
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!task.isAutomated}
+                        onClick={() => onPauseAutomation(task.id, true)}
+                        className="min-h-[48px] px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/30 text-xs font-bold disabled:opacity-40"
+                      >
+                        Pause
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onResetAutomation(task.id)}
+                      className="min-h-[48px] px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-400 border border-zinc-700 text-xs font-bold"
+                    >
+                      Reset stats
+                    </button>
+                  </div>
+
+                  {isFollowupRuleId(task.id) && (
+                    <div className="space-y-2 pt-1">
+                      <label className="block">
+                        <span className="text-xs font-bold text-zinc-400">Message text — use {'{firstName}'}, {'{businessName}'}{task.id === 'rule-review' ? ', {reviewLink}' : ''}</span>
+                        <textarea
+                          value={task.messageTemplate || FOLLOWUP_META[task.id as 'rule-welcome' | 'rule-missed-call' | 'rule-review'].defaultTemplate}
+                          onChange={(e) => onUpdateAutomationTemplate?.(task.id, e.target.value)}
+                          rows={5}
+                          autoComplete="off"
+                          className="mt-1 w-full bg-[#0c1211] border border-zinc-700 rounded-xl px-2.5 py-2 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-[#22ec72]"
+                        />
+                      </label>
+                      {task.id === 'rule-review' && (
+                        <label className="block">
+                          <span className="text-xs font-bold text-zinc-400">Review link (your Google review page — pasted into the message)</span>
+                          <input
+                            type="url"
+                            value={task.reviewLink || ''}
+                            onChange={(e) => onUpdateAutomationReviewLink?.(task.id, e.target.value)}
+                            placeholder="https://g.page/r/…"
+                            autoComplete="off"
+                            className="mt-1 w-full bg-[#0c1211] border border-zinc-700 rounded-xl px-2.5 py-2 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-[#22ec72]"
+                          />
+                        </label>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onUpdateAutomationTemplate?.(task.id, FOLLOWUP_META[task.id as 'rule-welcome' | 'rule-missed-call' | 'rule-review'].defaultTemplate)}
+                        className="min-h-[48px] px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-400 border border-zinc-700 text-xs font-bold"
+                      >
+                        Reset message to default
+                      </button>
+                    </div>
+                  )}
+                </div>
+                );
+              })}
+            </div>
+
+            {/* Smart timing (conditional logic) + Industry pacing (industry modifier) */}
+            <div className="space-y-2">
+              <div className="p-3 rounded-xl bg-[#05090a]/60 border border-[#1d2b26] flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-bold text-white">Smart timing</div>
+                  <div className="text-xs text-zinc-400">
+                    Hold non-urgent automations during your quiet hours. Emergencies always fire.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onToggleConditionalLogic(!conditionalLogicOn)}
+                  className={`min-h-[48px] relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    conditionalLogicOn ? 'bg-[#22ec72]' : 'bg-zinc-800'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-black shadow transition duration-200 ease-in-out ${
+                      conditionalLogicOn ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+              <div className="p-3 rounded-xl bg-[#05090a]/60 border border-[#1d2b26] flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-bold text-white">Industry pacing</div>
+                  <div className="text-xs text-zinc-400">
+                    Follow-up timing matches your trade's pace. Now: {describeFollowupWindow(industryName, industryModifierOn)}.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onToggleIndustryModifier(!industryModifierOn)}
+                  className={`min-h-[48px] relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    industryModifierOn ? 'bg-[#22ec72]' : 'bg-zinc-800'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-black shadow transition duration-200 ease-in-out ${
+                      industryModifierOn ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Custom Rule Creation Form */}
+            {isAddingTask && (
+              <form onSubmit={handleAddTask} className="p-3 rounded-xl bg-black border border-[#22ec72]/50 space-y-2 mt-2">
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Plus className="w-3.5 h-3.5 text-[#22ec72]" />
+                  <span>New Company Automation Rule</span>
+                </div>
+                <input
+                  type="text"
+                  required
+                  value={newTaskName}
+                  onChange={(e) => setNewTaskName(e.target.value)}
+                  placeholder="e.g., Auto-send client invoice upon tech check-out"
+                  className="w-full bg-[#05090a] border border-[#1d2b26] rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[#22ec72]"
+                />
+                <input
+                  type="text"
+                  value={newTaskDescription}
+                  onChange={(e) => setNewTaskDescription(e.target.value)}
+                  placeholder="Description of automated action"
+                  className="w-full bg-[#05090a] border border-[#1d2b26] rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[#22ec72]"
+                />
+                <div className="flex gap-2 justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingTask(false)}
+                    className="min-h-[48px] px-3 py-1 rounded-lg bg-zinc-800 text-xs text-zinc-400 hover:text-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="min-h-[48px] px-3 py-1 rounded-lg bg-[#22ec72] text-black font-bold text-xs cursor-pointer"
+                  >
+                    Save Rule
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+          {/* Recently Fired — automation activity log */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-2">
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 text-[#22ec72]" />
+              <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                Recently Fired
+              </h3>
+            </div>
+            {fireLog.length === 0 ? (
+              <p className="text-xs text-zinc-500">
+                No automations have fired yet. When a rule runs, it will show up here.
+              </p>
+            ) : (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {fireLog.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="p-2 rounded-xl bg-[#05090a]/60 border border-[#1d2b26] flex items-start justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-white truncate">{entry.ruleName}</div>
+                      <div className="text-xs text-zinc-400 truncate">{entry.detail}</div>
+                    </div>
+                    <span className="text-xs text-zinc-500 font-mono shrink-0">
+                      {new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Diagnostics — RCOS Master Dashboard spec */}
+          <DiagnosticsPanel />
+
+          {/* Guided first-run app check — read-only, changes nothing */}
+          <AppCheckPanel
+            currentUser={currentUser}
+            businessId={businessId}
+            business={business}
+            automationTasks={automationTasks}
+            automationMasterOn={automationMasterOn}
+          />
+
+          {/* Training — RCOS onboarding funnel spec */}
+          <TrainingChecklist />
+
+      {/* ============================================================== */}
+      {/* SECTION 3: TYPICAL DEVICE SETTINGS */}
+      {/* ============================================================== */}
+      {activeSection === 'device' && (
+        <div className="space-y-4 animate-in fade-in duration-200">
+          {/* Device Alert & Ringer Profile */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Volume2 className="w-4 h-4 text-[#22ec72]" />
+                <span>Device Alert & Audio Profile</span>
+              </span>
+              <span className="text-xs text-[#22ec72] font-mono font-bold uppercase">
+                Mode: {ringerMode}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateNotifPreferences({
+                    ...notifPreferences,
+                    ringerMode: 'sound',
+                    soundEnabled: true,
+                    vibrationEnabled: true
+                  });
+                  showToast('Ringer Mode: Full Audio enabled');
+                }}
+                className={`min-h-[48px] p-3 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                  ringerMode === 'sound'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-[#22ec72] font-bold'
+                    : 'bg-[#05090a] border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Volume2 className="w-5 h-5" />
+                <span className="text-xs">Sound</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateNotifPreferences({
+                    ...notifPreferences,
+                    ringerMode: 'vibrate',
+                    soundEnabled: false,
+                    vibrationEnabled: true
+                  });
+                  showToast('Ringer Mode: Vibrate Only');
+                }}
+                className={`min-h-[48px] p-3 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                  ringerMode === 'vibrate'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-[#22ec72] font-bold'
+                    : 'bg-[#05090a] border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Smartphone className="w-5 h-5" />
+                <span className="text-xs">Vibrate</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onUpdateNotifPreferences({
+                    ...notifPreferences,
+                    ringerMode: 'silent',
+                    soundEnabled: false,
+                    vibrationEnabled: false
+                  });
+                  showToast('Ringer Mode: Silent');
+                }}
+                className={`min-h-[48px] p-3 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                  ringerMode === 'silent'
+                    ? 'bg-[#22ec72]/10 border-[#22ec72] text-[#22ec72] font-bold'
+                    : 'bg-[#05090a] border-[#1d2b26] text-zinc-400 hover:text-white'
+                }`}
+              >
+                <VolumeX className="w-5 h-5" />
+                <span className="text-xs">Silent</span>
+              </button>
+            </div>
+
+            <div className="pt-2 border-t border-[#1d2b26] flex items-center justify-between">
+              <span className="text-xs text-zinc-400">Test Native Audio Tone:</span>
+              <button
+                type="button"
+                onClick={onTriggerTestPush}
+                className="min-h-[48px] px-3 py-1.5 rounded-xl bg-[#05090a] hover:bg-[#1d2b26] border border-[#1d2b26] text-xs font-mono font-bold text-white flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Bell className="w-3.5 h-3.5 text-[#22ec72]" />
+                <span>Test Alert</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Local Storage & Cache Maintenance */}
+          <div className="p-4 rounded-2xl bg-[#0c1211] border border-[#1d2b26] space-y-3">
+            <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+              <HardDrive className="w-4 h-4 text-[#22ec72]" />
+              <span>Offline Storage & App Data</span>
+            </span>
+
+            <div className="p-3 rounded-xl bg-[#05090a]/60 border border-[#1d2b26] flex items-center justify-between text-xs font-mono">
+              <div>
+                <div className="text-white font-bold">App Status:</div>
+                <div className="text-xs text-zinc-400">Connected & Synced</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[#22ec72] font-bold">OPERATIONAL</div>
+                <div className="text-xs text-zinc-400">Fast Local Storage</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-xs text-zinc-400">Clear Temporary Data:</span>
+              <button
+                type="button"
+                onClick={handleClearCache}
+                className="min-h-[48px] px-3 py-1.5 rounded-xl bg-[#05090a] hover:bg-[#1d2b26] border border-[#1d2b26] text-xs font-mono text-zinc-300 hover:text-white flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-[#22ec72] ${cacheCleared ? 'animate-spin' : ''}`} />
+                <span>Clear Cache</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Danger Zone — Delete Account */}
+      <div className="p-4 rounded-2xl bg-[#0c1211] border border-red-900/60 space-y-3">
+        <span className="text-xs font-bold text-red-400 uppercase tracking-wider flex items-center gap-1.5">
+          <ShieldAlert className="w-4 h-4 text-red-400" />
+          <span>Danger Zone</span>
+        </span>
+
+        {deleteStep === 'idle' && (
+          <>
+            <p className="text-xs text-zinc-400">
+              Delete your account and all of your data from this app. This cannot be undone.
+            </p>
+            <button
+              type="button"
+              onClick={() => setDeleteStep('warn')}
+              className="min-h-[48px] px-3 py-2 rounded-xl bg-transparent hover:bg-red-500/10 border border-red-800 text-xs font-bold text-red-400 flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Delete Account</span>
+            </button>
+          </>
+        )}
+
+        {deleteStep === 'warn' && (
+          <>
+            <p className="text-sm text-white font-bold">This will permanently delete:</p>
+            {teamIsOwner ? (
+              <>
+                <ul className="text-xs text-zinc-300 list-disc pl-5 space-y-1">
+                  <li>Your login and profile</li>
+                  <li>Your business profile — and every team member loses access to it too</li>
+                  <li>Your customers and customer requests</li>
+                  <li>Your jobs, quotes, invoices, and approvals</li>
+                  <li>Your chat history and Agent Inbox messages</li>
+                  <li>Your voicemails and call history</li>
+                  <li>Your Gmail connection</li>
+                  <li>Your saved settings, including fingerprint login</li>
+                </ul>
+                <p className="text-xs text-red-300 font-semibold">
+                  This cannot be undone. Once you delete your account, everything above is gone for good.
+                </p>
+              </>
+            ) : (
+              <>
+                <ul className="text-xs text-zinc-300 list-disc pl-5 space-y-1">
+                  <li>Your login and profile</li>
+                  <li>Your spot on this team — you will be removed from the company</li>
+                  <li>Your saved settings, including fingerprint login</li>
+                </ul>
+                <p className="text-xs text-red-300 font-semibold">
+                  This cannot be undone. The company's jobs, customers, and other data stay — they belong to the company.
+                </p>
+              </>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteStep('idle')}
+                className="min-h-[48px] px-3 py-2 rounded-xl bg-[#05090a] hover:bg-[#1d2b26] border border-[#1d2b26] text-xs font-bold text-zinc-300 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteStep('confirm')}
+                className="min-h-[48px] px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-bold text-white transition cursor-pointer"
+              >
+                I understand, continue
+              </button>
+            </div>
+          </>
+        )}
+
+        {deleteStep === 'confirm' && (
+          <>
+            <p className="text-xs text-zinc-300">
+              To confirm, type <span className="font-mono font-bold text-white">DELETE</span> in the box below.
+            </p>
+            <input
+              value={deleteInput}
+              onChange={(e) => setDeleteInput(e.target.value)}
+              placeholder="Type DELETE"
+              autoComplete="off"
+              autoCapitalize="characters"
+              className="w-full px-3 py-2 rounded-xl bg-[#05090a] border border-[#1d2b26] text-sm text-white placeholder:text-zinc-500 outline-none focus:border-red-700"
+            />
+            {deleteNeedsPassword ? (
+              <>
+                <p className="text-xs text-zinc-300">
+                  Then type your account password. It must match, or nothing is deleted.
+                </p>
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  placeholder="Your account password"
+                  autoComplete="current-password"
+                  className="w-full px-3 py-2 rounded-xl bg-[#05090a] border border-[#1d2b26] text-sm text-white placeholder:text-zinc-500 outline-none focus:border-red-700"
+                />
+              </>
+            ) : (
+              <p className="text-xs text-zinc-400">
+                You signed in with Google, so no password is needed.
+              </p>
+            )}
+            {deleteError && (
+              <p className="text-xs text-red-300">{deleteError}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setDeleteStep('idle'); setDeleteInput(''); setDeletePassword(''); setDeleteError(null); }}
+                className="min-h-[48px] px-3 py-2 rounded-xl bg-[#05090a] hover:bg-[#1d2b26] border border-[#1d2b26] text-xs font-bold text-zinc-300 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteAccount}
+                disabled={deleteInput !== 'DELETE' || deleteDeleting || (deleteNeedsPassword && !deletePassword)}
+                className="min-h-[48px] px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-xs font-bold text-white transition cursor-pointer"
+              >
+                {deleteDeleting ? 'Deleting…' : (teamIsOwner ? 'Delete everything' : 'Leave & delete my login')}
+              </button>
+            </div>
+          </>
+        )}
+
+        {deleteStep === 'done' && (
+          <>
+            <p className="text-sm text-white font-bold">Your account and all data have been deleted.</p>
+            {deleteNotice && (
+              <p className="text-xs text-amber-300 mt-2">{deleteNotice}</p>
+            )}
+            <p className="text-xs text-zinc-400">Taking you to the login screen…</p>
+          </>
+        )}
+      </div>
+
+      {/* AI Employee Job Customizer Modal */}
+      <EmployeeJobCustomizerModal
+        isOpen={!!selectedEmployeeForCustomizer}
+        onClose={() => setSelectedEmployeeForCustomizer(null)}
+        employee={selectedEmployeeForCustomizer}
+        businessId={businessId}
+        onSaved={(updated) => {
+          setCustomEmployees(prev => prev.map(e => e.id === updated.id ? updated : e));
+          setSelectedEmployeeForCustomizer(null);
+          showToast(`Saved customized job profile for ${updated.name}!`);
+        }}
+      />
+    </div>
+  );
+};

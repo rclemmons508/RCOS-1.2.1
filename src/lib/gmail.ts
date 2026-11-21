@@ -1,0 +1,618 @@
+import { auth, gmailOAuthProvider, GMAIL_SCOPES } from './firebase';
+import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged } from 'firebase/auth';
+import { Capacitor } from '@capacitor/core';
+import { Browser } from '@capacitor/browser';
+import { apiFetch } from './api';
+import { getApiBaseUrl } from '../config/api';
+import { teamHeaders } from '../services/teamService';
+import { safeOpenUrl } from './safeOpen';
+
+export interface GmailMessageSummary {
+  id: string;
+  threadId: string;
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+  timestamp: number;
+  snippet: string;
+  labelIds: string[];
+  isUnread: boolean;
+  isStarred: boolean;
+}
+
+export interface GmailMessageDetail extends GmailMessageSummary {
+  cc?: string;
+  bcc?: string;
+  bodyHtml: string;
+  bodyText: string;
+}
+
+export interface SendEmailParams {
+  to: string;
+  cc?: string;
+  bcc?: string;
+  subject: string;
+  body: string;
+  threadId?: string;
+}
+
+export interface GmailProfile {
+  emailAddress: string;
+  messagesTotal: number;
+  threadsTotal: number;
+  historyId: string;
+}
+
+export interface GmailLabel {
+  id: string;
+  name: string;
+  type: string;
+  messagesUnread?: number;
+  messagesTotal?: number;
+}
+
+// In-Memory Token Cache (MANDATORY: Never stored in localStorage or sessionStorage)
+// The cached token is tagged with WHOSE Gmail it is (businessId + userEmail),
+// so one person's token can never be served to a teammate who signs in on
+// the same device. A token with no userEmail is treated as unbound.
+interface CachedGmailToken {
+  token: string;
+  businessId: string; // '' when not tied to a business (web popup sign-in)
+  userEmail: string; // normalized lowercase; whose Gmail this token opens
+}
+
+let cachedGmailToken: CachedGmailToken | null = null;
+let tokenListeners: ((token: string | null) => void)[] = [];
+
+function normalizeGmailEmail(email: unknown): string {
+  return String(email || '').trim().toLowerCase();
+}
+
+export const getCachedAccessToken = (): string | null => cachedGmailToken?.token ?? null;
+
+export const getCachedGmailIdentity = (): { businessId: string; userEmail: string } | null =>
+  cachedGmailToken
+    ? { businessId: cachedGmailToken.businessId, userEmail: cachedGmailToken.userEmail }
+    : null;
+
+export const setCachedAccessToken = (
+  token: string | null,
+  identity?: { businessId?: string; userEmail?: string }
+) => {
+  cachedGmailToken =
+    token === null
+      ? null
+      : {
+          token,
+          businessId: identity?.businessId || '',
+          userEmail: normalizeGmailEmail(identity?.userEmail),
+        };
+  tokenListeners.forEach((listener) => listener(token));
+};
+
+export const onTokenChange = (listener: (token: string | null) => void) => {
+  tokenListeners.push(listener);
+  return () => {
+    tokenListeners = tokenListeners.filter((l) => l !== listener);
+  };
+};
+
+/**
+ * Silently restore the Gmail access token from the server, without OAuth.
+ * Per user: restores ONLY the signed-in user's own Gmail token — the
+ * server stores one token record per person, and the request says who is
+ * asking (the same X-User-Email header Team Chat sends). The restored
+ * token stays in memory only — it is never written to
+ * localStorage or sessionStorage, same as every other token in this file.
+ * Returns the token, or null when this user has not connected Gmail or the
+ * restore failed. Never throws: callers treat null as "show the Connect flow".
+ *
+ * One retry after a short pause: a page change or app reopen can race a
+ * network or sign-in flicker, and a single failed attempt must not log the
+ * user out of Gmail. A 404 is the server's final answer ("this user has
+ * not connected Gmail") — retrying it only burns the rate limit.
+ */
+const RESTORE_RETRY_DELAY_MS = 1500;
+
+export async function restoreGmailToken(
+  businessId: string,
+  userEmail: string,
+  opts?: { retries?: number }
+): Promise<string | null> {
+  const requester = normalizeGmailEmail(userEmail);
+  if (!businessId || !requester) return null;
+  const cached = cachedGmailToken;
+  if (cached && cached.userEmail === requester && (cached.businessId === businessId || cached.businessId === '')) {
+    // Same person's token. A cached token not yet tied to a business
+    // (the web popup sign-in path) gets bound here so later checks are exact.
+    if (cached.businessId === '') {
+      cachedGmailToken = { ...cached, businessId };
+    }
+    return cached.token;
+  }
+  // A cached token for someone else must never ride along into this user's
+  // session — drop it before asking the server for this user's own.
+  if (cachedGmailToken) setCachedAccessToken(null);
+  const maxAttempts = 1 + (opts?.retries ?? 1);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const tok = await apiFetch<{ accessToken: string; email: string }>(
+        `/api/business/${encodeURIComponent(businessId)}/gmail-token`,
+        { headers: teamHeaders(requester) }
+      );
+      if (!tok?.accessToken) return null;
+      setCachedAccessToken(tok.accessToken, { businessId, userEmail: requester });
+      return tok.accessToken;
+    } catch (e) {
+      // 404 = not connected. Final answer, not a flicker — don't retry.
+      if ((e as any)?.status === 404) return null;
+      if (attempt >= maxAttempts) {
+        console.warn('[GmailAuth] Silent token restore failed:', (e as any)?.message);
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, RESTORE_RETRY_DELAY_MS));
+    }
+  }
+  return null;
+}
+
+// Clear token on sign out
+onAuthStateChanged(auth, (user) => {
+  if (!user) {
+    setCachedAccessToken(null);
+  }
+});
+
+/**
+ * Trigger Google Sign-in specifically for Gmail OAuth token
+ */
+/**
+ * Trigger Google Sign-in specifically for Gmail OAuth token.
+ * On Android this uses a real Google login in a system browser tab and
+ * returns the user straight back into the app — no separate window left behind.
+ */
+export async function authenticateGmail(
+  businessId?: string,
+  userEmail?: string
+): Promise<{ user: any; accessToken: string }> {
+  // The person connecting must be identified so the server stores the token
+  // under THEIR account, not the business as a whole.
+  const requester = normalizeGmailEmail(userEmail);
+  if (!requester) {
+    throw new Error('Sign in first, then connect Gmail.');
+  }
+  if (Capacitor.isNativePlatform()) {
+    // Google does not allow logins inside an app's embedded browser, so we
+    // open Google's own login page in a proper system browser tab. When the
+    // login finishes, our server sends the user straight back into the RCOS
+    // app (deep link), and we close the tab.
+    const { App } = await import('@capacitor/app');
+    const biz = businessId || 'default';
+    const state = `g${Date.now()}${Math.floor(Math.random() * 1000000)}`;
+    const startUrl =
+      `${getApiBaseUrl()}/oauth/gmail/start?businessId=${encodeURIComponent(biz)}&userEmail=${encodeURIComponent(requester)}&state=${encodeURIComponent(state)}`;
+
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const finish = async (ok: boolean, err?: unknown) => {
+        if (done) return;
+        done = true;
+        try { await listener?.remove(); } catch { /* noop */ }
+        try { await Browser.close(); } catch { /* tab may already be gone */ }
+        if (!ok) {
+          reject(err instanceof Error ? err : new Error('Gmail login did not finish.'));
+          return;
+        }
+        try {
+          const tok = await apiFetch<{ accessToken: string; email: string }>(
+            `/api/business/${encodeURIComponent(biz)}/gmail-token`,
+            { headers: teamHeaders(requester) }
+          );
+          setCachedAccessToken(tok.accessToken, { businessId: biz, userEmail: requester });
+          resolve({ user: { email: tok.email || '' } as any, accessToken: tok.accessToken });
+        } catch (e) {
+          reject(e);
+        }
+      };
+
+      let listener: { remove: () => Promise<void> } | null = null;
+      App.addListener('appUrlOpen', (data: any) => {
+        if (typeof data?.url === 'string' && data.url.startsWith('rcosmobile://gmail-connected')) {
+          finish(true);
+        }
+      }).then((h) => { listener = h; }).catch(() => { /* timeout below still guards */ });
+
+      // Give up after 5 minutes (e.g. the user closed the browser tab).
+      setTimeout(() => finish(false, new Error('Gmail login timed out. Please try again.')), 5 * 60 * 1000);
+
+      safeOpenUrl(startUrl)
+        .then((opened) => { if (!opened) finish(false, new Error('Could not open the Google sign-in page.')); })
+        .catch((e) => finish(false, e));
+    });
+  }
+
+  try {
+    const result = await signInWithPopup(auth, gmailOAuthProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const token = credential?.accessToken;
+
+    if (!token) {
+      throw new Error('No access token returned from Google authentication.');
+    }
+
+    setCachedAccessToken(token, {
+      businessId: businessId || '',
+      userEmail: (result.user as any)?.email || requester,
+    });
+    return { user: result.user, accessToken: token };
+  } catch (err: any) {
+    console.warn('[GmailAuth] Popup authentication failed:', err?.code, err?.message);
+    throw err instanceof Error ? err : new Error('Google sign-in failed. Please try again.');
+  }
+}
+
+// RFC 4648 Base64URL encoding/decoding helpers
+function base64UrlEncode(str: string): string {
+  return btoa(unescape(encodeURIComponent(str)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function base64UrlDecode(str: string): string {
+  try {
+    const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    return decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+  } catch {
+    try {
+      return atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+    } catch {
+      return '';
+    }
+  }
+}
+
+function parseHeaders(headers: Array<{ name: string; value: string }> = []) {
+  const map: Record<string, string> = {};
+  headers.forEach((h) => {
+    map[h.name.toLowerCase()] = h.value;
+  });
+  return map;
+}
+
+function extractBody(payload: any): { html: string; text: string } {
+  let html = '';
+  let text = '';
+
+  if (!payload) return { html, text };
+
+  if (payload.body && payload.body.data) {
+    const decoded = base64UrlDecode(payload.body.data);
+    if (payload.mimeType === 'text/html') {
+      html = decoded;
+    } else {
+      text = decoded;
+    }
+  }
+
+  if (payload.parts && Array.isArray(payload.parts)) {
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/plain' && part.body?.data) {
+        text = text || base64UrlDecode(part.body.data);
+      } else if (part.mimeType === 'text/html' && part.body?.data) {
+        html = html || base64UrlDecode(part.body.data);
+      } else if (part.parts) {
+        const nested = extractBody(part);
+        if (!text) text = nested.text;
+        if (!html) html = nested.html;
+      }
+    }
+  }
+
+  if (!html && text) {
+    html = `<div style="font-family: sans-serif; white-space: pre-wrap;">${escapeHtml(text)}</div>`;
+  }
+
+  return { html, text };
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/* =============================================================
+ * GMAIL REST API CLIENT CALLS
+ * ============================================================= */
+
+const GMAIL_BASE_URL = 'https://gmail.googleapis.com/gmail/v1/users/me';
+
+async function fetchWithAuth(endpoint: string, options: RequestInit = {}): Promise<any> {
+  const token = getCachedAccessToken();
+  if (!token) {
+    throw new Error('Not authenticated with Gmail. Please sign in with Google to connect your account.');
+  }
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(`${GMAIL_BASE_URL}${endpoint}`, {
+      ...options,
+      headers,
+    });
+  } catch {
+    throw new Error('Could not reach Gmail. Check your connection and try again.');
+  }
+
+  if (!res.ok) {
+    let errMessage = `Gmail API Error (${res.status} ${res.statusText})`;
+    try {
+      const errJson = await res.json();
+      if (errJson?.error?.message) {
+        errMessage = errJson.error.message;
+      }
+    } catch {
+      // ignore json parse error
+    }
+    throw new Error(errMessage);
+  }
+
+  // 204 No Content
+  if (res.status === 204) return null;
+
+  return res.json();
+}
+
+export async function getGmailProfile(): Promise<GmailProfile> {
+  return await fetchWithAuth('/profile');
+}
+
+/**
+ * List labels in mailbox
+ */
+export async function listGmailLabels(): Promise<GmailLabel[]> {
+  const data = await fetchWithAuth('/labels');
+  return data.labels || [];
+}
+
+/**
+ * List Messages
+ */
+export async function listGmailMessages(options?: {
+  query?: string;
+  labelIds?: string[];
+  maxResults?: number;
+  pageToken?: string;
+}): Promise<{ messages: GmailMessageSummary[]; nextPageToken?: string }> {
+  const queryParams = new URLSearchParams();
+  if (options?.query) queryParams.set('q', options.query);
+  if (options?.labelIds && options.labelIds.length > 0) {
+    options.labelIds.forEach((id) => queryParams.append('labelIds', id));
+  }
+  queryParams.set('maxResults', String(options?.maxResults || 20));
+  if (options?.pageToken) queryParams.set('pageToken', options.pageToken);
+
+  const res = await fetchWithAuth(`/messages?${queryParams.toString()}`);
+  const messageItems: Array<{ id: string; threadId: string }> = res.messages || [];
+
+  if (messageItems.length === 0) {
+    return { messages: [], nextPageToken: res.nextPageToken };
+  }
+
+  // Fetch summaries in parallel (up to 15 at a time)
+  const summaries = await Promise.all(
+    messageItems.slice(0, 15).map(async (item) => {
+      try {
+        const fullMsg = await fetchWithAuth(`/messages/${item.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date`);
+        const headerMap = parseHeaders(fullMsg.payload?.headers);
+        const labelIds = fullMsg.labelIds || [];
+        const isUnread = labelIds.includes('UNREAD');
+        const isStarred = labelIds.includes('STARRED');
+
+        return {
+          id: fullMsg.id,
+          threadId: fullMsg.threadId,
+          from: headerMap['from'] || 'Unknown Sender',
+          to: headerMap['to'] || '',
+          subject: headerMap['subject'] || '(No Subject)',
+          date: headerMap['date'] || '',
+          timestamp: Number(fullMsg.internalDate) || Date.now(),
+          snippet: fullMsg.snippet || '',
+          labelIds,
+          isUnread,
+          isStarred,
+        } as GmailMessageSummary;
+      } catch (e) {
+        return {
+          id: item.id,
+          threadId: item.threadId,
+          from: 'Email Item',
+          to: '',
+          subject: `Message #${item.id}`,
+          date: '',
+          timestamp: Date.now(),
+          snippet: '',
+          labelIds: [],
+          isUnread: false,
+          isStarred: false,
+        } as GmailMessageSummary;
+      }
+    })
+  );
+
+  return {
+    messages: summaries,
+    nextPageToken: res.nextPageToken,
+  };
+}
+
+/**
+ * Get Single Message Full Detail
+ */
+export async function getGmailMessage(id: string): Promise<GmailMessageDetail> {
+  const fullMsg = await fetchWithAuth(`/messages/${id}?format=full`);
+  const headerMap = parseHeaders(fullMsg.payload?.headers);
+  const labelIds = fullMsg.labelIds || [];
+  const { html, text } = extractBody(fullMsg.payload);
+
+  return {
+    id: fullMsg.id,
+    threadId: fullMsg.threadId,
+    from: headerMap['from'] || 'Unknown Sender',
+    to: headerMap['to'] || '',
+    cc: headerMap['cc'],
+    bcc: headerMap['bcc'],
+    subject: headerMap['subject'] || '(No Subject)',
+    date: headerMap['date'] || '',
+    timestamp: Number(fullMsg.internalDate) || Date.now(),
+    snippet: fullMsg.snippet || '',
+    bodyHtml: html || (text ? `<pre>${text}</pre>` : '<p className="text-zinc-500 italic">No content</p>'),
+    bodyText: text,
+    labelIds,
+    isUnread: labelIds.includes('UNREAD'),
+    isStarred: labelIds.includes('STARRED'),
+  };
+}
+
+/**
+ * Send an Email (RFC 2822 format encoded in base64url)
+ */
+export async function sendGmailMessage(params: SendEmailParams): Promise<{ id: string; threadId: string }> {
+  const headers = [
+    `To: ${params.to}`,
+    params.cc ? `Cc: ${params.cc}` : null,
+    params.bcc ? `Bcc: ${params.bcc}` : null,
+    `Subject: ${params.subject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    '',
+    params.body.replace(/\n/g, '<br/>'),
+  ].filter(Boolean).join('\r\n');
+
+  const raw = base64UrlEncode(headers);
+
+  const payload: any = { raw };
+  if (params.threadId) {
+    payload.threadId = params.threadId;
+  }
+
+  return await fetchWithAuth('/messages/send', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Create a Draft
+ */
+export async function createGmailDraft(params: SendEmailParams): Promise<{ id: string }> {
+  const headers = [
+    `To: ${params.to}`,
+    params.cc ? `Cc: ${params.cc}` : null,
+    params.bcc ? `Bcc: ${params.bcc}` : null,
+    `Subject: ${params.subject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    '',
+    params.body.replace(/\n/g, '<br/>'),
+  ].filter(Boolean).join('\r\n');
+
+  const raw = base64UrlEncode(headers);
+
+  return await fetchWithAuth('/drafts', {
+    method: 'POST',
+    body: JSON.stringify({
+      message: { raw, threadId: params.threadId },
+    }),
+  });
+}
+
+/**
+ * Move message to Trash
+ */
+export async function trashGmailMessage(id: string): Promise<any> {
+  return await fetchWithAuth(`/messages/${id}/trash`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Untrash / restore message
+ */
+export async function untrashGmailMessage(id: string): Promise<any> {
+  return await fetchWithAuth(`/messages/${id}/untrash`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * "Delete permanently". A true permanent delete needs the full
+ * https://mail.google.com/ scope, which the app no longer requests (see
+ * GMAIL_SCOPES). Tokens granted before the scope cut can still delete;
+ * otherwise the message is moved to Trash (Gmail empties Trash after 30 days).
+ */
+export async function deleteGmailMessage(id: string): Promise<{ outcome: 'deleted' | 'trashed' }> {
+  try {
+    await fetchWithAuth(`/messages/${id}`, {
+      method: 'DELETE',
+    });
+    return { outcome: 'deleted' };
+  } catch {
+    await trashGmailMessage(id);
+    return { outcome: 'trashed' };
+  }
+}
+
+/**
+ * Modify Labels (mark read/unread, star/unstar)
+ */
+export async function modifyGmailMessageLabels(
+  id: string,
+  addLabelIds: string[] = [],
+  removeLabelIds: string[] = []
+): Promise<any> {
+  return await fetchWithAuth(`/messages/${id}/modify`, {
+    method: 'POST',
+    body: JSON.stringify({
+      addLabelIds,
+      removeLabelIds,
+    }),
+  });
+}
+
+export async function markMessageRead(id: string): Promise<void> {
+  await modifyGmailMessageLabels(id, [], ['UNREAD']);
+}
+
+export async function markMessageUnread(id: string): Promise<void> {
+  await modifyGmailMessageLabels(id, ['UNREAD'], []);
+}
+
+export async function toggleMessageStar(id: string, currentStarred: boolean): Promise<void> {
+  if (currentStarred) {
+    await modifyGmailMessageLabels(id, [], ['STARRED']);
+  } else {
+    await modifyGmailMessageLabels(id, ['STARRED'], []);
+  }
+}
+
+/* =============================================================
+ * PREVIEW DATA REMOVED (Stage 2 audit M5)
+ * The fictional INITIAL_PREVIEW_MESSAGES inbox was deleted: when
+ * Gmail is not connected the tab now shows an explicit empty state
+ * instead of invented mail. No sample messages live here anymore.
+ * ============================================================= */

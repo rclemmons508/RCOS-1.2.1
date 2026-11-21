@@ -1,0 +1,1509 @@
+import { IndustryPreset } from '../types';
+
+export const INDUSTRY_PRESETS: IndustryPreset[] = [
+  {
+    id: 'cleaning',
+    name: 'Cleaning & Maid Services',
+    description: 'Residential, commercial, deep cleaning, and solo/home-based operators.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Standard Clean', 'Deep Clean', 'Move-in/Move-out Clean', 'Office Sanitation', 'Window & Baseboard Add-on'],
+    recommendedTone: 'Friendly, warm, dependable, and sparkling clean',
+    technicianRoleName: 'Cleaning Specialist',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Cleaning Specialist', 'Field Cleaner', 'Quality Inspector', 'Dispatcher / Scheduler', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_deep_clean',
+        serviceType: 'Deep Clean',
+        industry: 'cleaning',
+        checklist: [
+          'Kitchen: degrease stove backsplash, clean inside microwave, exterior cabinets',
+          'Bathrooms: scrub tile grout, disinfect toilets, polish mirrors and chrome fixtures',
+          'Living & Bedrooms: dust ceiling fans, baseboards, door frames, vacuum under furniture',
+          'Floors: high-traffic vacuum followed by microfiber disinfectant mop'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm pet status and client access code/lockbox', 'Inspect rooms for existing scratches or fragile decor', 'Air out rooms if heavy degreasers will be applied'],
+          execute: ['Top-to-bottom dusting', 'Kitchen deep scrubbing', 'Bathroom sanitary sterilization', 'Floor washing from furthest room towards exit'],
+          cleanUp: ['Empty and double-bag all trash cans', 'Launder dirty microfibers separately', 'Check that all interior lights are turned off as requested'],
+          clientConfirmation: ['Leave scent card / checklist', 'Send digital completion walkthrough with before/after photos']
+        },
+        requiredTools: ['HEPA vacuum', 'Color-coded microfiber towels', 'Grout brush', 'Non-toxic disinfectant', 'Telescopic duster'],
+        safetyNotes: ['Never mix bleach and ammonia products', 'Wear anti-slip shoes when mopping tiled surfaces', 'Test hidden spots before applying oven cleaners'],
+        troubleshootingNotes: ['If stubborn hard water stains remain, apply vinegar soak for 15 mins before abrasive scrubbing']
+      }
+    ]
+  },
+  {
+    id: 'handyman',
+    name: 'Handyman & Home Repair',
+    description: 'General repairs, fixture installation, drywall, carpentry, and electrical fixes.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Drywall Patch & Paint', 'Door & Lock Replacement', 'Fixture & Fan Mounting', 'Plumbing Leak Fix', 'Cabinet Hardware & Shelving'],
+    recommendedTone: 'Direct, honest, highly capable, and practical',
+    technicianRoleName: 'Lead Handyman',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Lead Handyman', 'Field Technician', 'Apprentice', 'Dispatcher / Scheduler'],
+    sampleJobPacks: [
+      {
+        id: 'jp_drywall_repair',
+        serviceType: 'Drywall Patch & Paint',
+        industry: 'handyman',
+        checklist: [
+          'Inspect moisture behind damaged drywall',
+          'Cut clean square around hole and secure backing lumber',
+          'Fasten new sheetrock patch with drywall screws',
+          'Apply fiberglass mesh tape and feather 2-3 coats of joint compound',
+          'Sand smooth, prime patch, and paint blend with wall'
+        ],
+        workflowSequence: {
+          preCheck: ['Locate studs and hidden wiring using stud finder', 'Lay drop cloth over carpet or wood floor', 'Check paint code match with homeowner'],
+          execute: ['Square out hole', 'Install backing block', 'Screw in sheetrock', 'Mud, tape, and feather joint compound', 'Sand and touch-up paint'],
+          cleanUp: ['Vacuum drywall dust with shop vac', 'Wipe down surrounding baseboards', 'Pack tools and seal unused paint cans'],
+          clientConfirmation: ['Walk homeowner through seamless finish', 'Have homeowner touch surface once cured and confirm satisfaction']
+        },
+        requiredTools: ['Keyhole saw', 'Cordless drill & drywall screws', '6-inch & 10-inch taping knives', 'Sanding sponge (220 grit)', 'Stud finder'],
+        safetyNotes: ['Turn off breaker if working within 12 inches of wall outlets', 'Wear N95 respirator mask while sanding joint compound'],
+        troubleshootingNotes: ['If previous paint coat does not match, blend feathering out 18 inches in feathered strokes']
+      }
+    ]
+  },
+  {
+    id: 'landscaping',
+    name: 'Landscaping & Lawn Care',
+    description: 'Lawn maintenance, mulching, seasonal cleanup, irrigation, and tree trimming.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Weekly Mow & Edge', 'Spring/Fall Cleanup', 'Mulch & Bed Weeding', 'Hedge & Shrub Trimming', 'Aeration & Overseeding'],
+    recommendedTone: 'Polite, active, proud of craftsmanship, and punctual',
+    technicianRoleName: 'Crew Foreman',
+    staffRoles: ['Owner / Operator', 'Crew Lead', 'Field Technician', 'Irrigation Specialist', 'Dispatcher / Scheduler', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_mow_edge',
+        serviceType: 'Weekly Mow & Edge',
+        industry: 'landscaping',
+        checklist: [
+          'Pick up lawn debris, toys, and fallen twigs',
+          'Mow lawn at appropriate seasonal deck height (3.5 - 4 inches)',
+          'String trim along fences, foundations, and trees without girdling bark',
+          'Blade edge driveway, walkways, and garden curbs',
+          'Blow all clippings off paved areas back into turf'
+        ],
+        workflowSequence: {
+          preCheck: ['Inspect yard for pet waste or hidden sprinkler heads', 'Confirm back gate is latched'],
+          execute: ['Mowing striped passes', 'Precision perimeter string trimming', 'Crisp vertical edging along concrete'],
+          cleanUp: ['Blow patio, driveway, and front porch clean', 'Close and latch rear fence gate securely'],
+          clientConfirmation: ['Snap front & backyard proof photo', 'Send auto-notification that lawn is pristine and pets safe']
+        },
+        requiredTools: ['Commercial zero-turn/walk-behind mower', 'Gas/battery string trimmer', 'Stick edger', 'Backpack blower'],
+        safetyNotes: ['Eye and ear protection mandatory at all times', 'Check slope stability before riding mowers near ditches'],
+        troubleshootingNotes: ['If turf is saturated with morning rain, delay mowing or use light push mower to prevent rutting']
+      }
+    ]
+  },
+  {
+    id: 'painting',
+    name: 'Painting & Staining',
+    description: 'Interior painting, exterior coatings, cabinet refinishing, and deck staining.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Interior Room Painting', 'Exterior House Painting', 'Cabinet Refinishing', 'Deck Staining & Sealing', 'Trim & Molding Enamel'],
+    recommendedTone: 'Artisanal, meticulous, neat, and detail-obsessed',
+    technicianRoleName: 'Lead Painter',
+    staffRoles: ['Owner / Operator', 'Project Manager', 'Lead Painter', 'Painter', 'Apprentice', 'Estimator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_interior_paint',
+        serviceType: 'Interior Room Painting',
+        industry: 'painting',
+        checklist: [
+          'Move furniture to center of room and drape plastic',
+          'Mask trim, baseboards, and window frames with painter tape',
+          'Spackle nail holes and caulk baseboard gaps',
+          'Cut in ceiling and corners with angled sash brush',
+          'Roll two even coats of premium latex with uniform stipple'
+        ],
+        workflowSequence: {
+          preCheck: ['Verify paint color swatch against client contract', 'Check room humidity and lighting conditions'],
+          execute: ['Surface prep & taping', 'First coat cut & roll', 'Drying check (2 hours)', 'Second coat cut & roll'],
+          cleanUp: ['Carefully peel tape at 45 degree angle before paint fully cures', 'Remove drop cloths without stirring dust', 'Put switch plates back on'],
+          clientConfirmation: ['Inspect room with client under bright flashlight for holidays or flashing', 'Label leftover paint can for homeowner']
+        },
+        requiredTools: ['2.5-inch angled sash brush', '9-inch roller frame & 3/8-inch nap sleeves', 'Heavy canvas drop cloths', 'Quick-release painter tape'],
+        safetyNotes: ['Maintain proper ventilation throughout drying cycle', 'Use ladder levelers when cutting tall staircases'],
+        troubleshootingNotes: ['If wall shows roller lap marks, maintain a wet edge and roll floor-to-ceiling in continuous strokes']
+      }
+    ]
+  },
+  {
+    id: 'pressure_washing',
+    name: 'Pressure Washing & Soft Washing',
+    description: 'Driveway concrete cleaning, house siding soft wash, roof wash, and deck restoration.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Driveway & Sidewalk Wash', 'House Siding Soft Wash', 'Roof Moss Treatment', 'Fence & Deck Rejuvenation', 'Commercial Storefront Cleaning'],
+    recommendedTone: 'Energetic, pristine, safety-conscious, and transformative',
+    technicianRoleName: 'Wash Technician',
+    staffRoles: ['Owner / Operator', 'Crew Lead', 'Field Technician', 'Dispatcher / Scheduler', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_driveway_wash',
+        serviceType: 'Driveway & Sidewalk Wash',
+        industry: 'pressure_washing',
+        checklist: [
+          'Pre-wet all surrounding grass, shrubs, and flower beds with fresh water',
+          'Pre-treat oil stains with degreaser and scrub with stiff broom',
+          'Apply mild surfactant / algaecide pre-treatment to loosen deep grime',
+          'Run rotary surface cleaner in steady overlapping grid lines',
+          'Rinse dirty slurry toward street drain with high-volume wand',
+          'Post-treat with light fungicide to prevent rapid mold recurrence'
+        ],
+        workflowSequence: {
+          preCheck: ['Inspect concrete for spalling or loose expansion joints', 'Cover exterior power outlets with waterproof wrap'],
+          execute: ['Vegetation soaking', 'Surface cleaner passes', 'Slurry flush rinse', 'Post-treatment spray'],
+          cleanUp: ['Re-rinse all surrounding vegetation', 'Untape outlets and stow high-pressure hoses cleanly'],
+          clientConfirmation: ['Show dramatic before/after contrast', 'Caution client that wet concrete remains slick for 1 hour']
+        },
+        requiredTools: ['4000 PSI commercial pressure washer', '20-inch rotary surface cleaner', 'Chemical injector', 'Garden hose splitter'],
+        safetyNotes: ['Never point spray wand at living tissue or fragile glass', 'Wear steel-toe waterproof rubber boots and eye shield'],
+        troubleshootingNotes: ['If surface cleaner leaves swirl zebra stripes, slow walking pace and check tip nozzles for grit blockages']
+      }
+    ]
+  },
+  {
+    id: 'hvac',
+    name: 'HVAC Services',
+    description: 'Heating, ventilation, air conditioning installation, diagnostics, and preventative tune-ups.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['AC Diagnostic & Repair', 'Furnace Seasonal Tune-up', 'Heat Pump System Install', 'Duct Inspection & Air Quality', 'Thermostat Smart Setup'],
+    recommendedTone: 'Technical, reassuring, precise, and safety-rigorous',
+    technicianRoleName: 'HVAC Certified Technician',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'HVAC Lead Technician', 'Service Technician', 'Installer', 'Dispatcher', 'Sales / Estimator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_ac_tuneup',
+        serviceType: 'AC Diagnostic & Repair',
+        industry: 'hvac',
+        checklist: [
+          'Inspect high and low voltage disconnect switches',
+          'Measure capacitor microfarad capacitance against rated tolerance',
+          'Clean condenser coils with biodegradable foaming cleanser',
+          'Check refrigerant pressures and subcooling / superheat calculations',
+          'Flush condensate drain line and test float safety switch',
+          'Measure supply vs return temperature split (16-20°F delta-T target)'
+        ],
+        workflowSequence: {
+          preCheck: ['Lockout electrical disconnect at outdoor unit', 'Inspect indoor air filter condition'],
+          execute: ['Electrical component diagnostic', 'Coil cleaning and washdown', 'Refrigerant thermodynamic check', 'Airflow check'],
+          cleanUp: ['Replace service panel screws', 'Clean drain pan area', 'Verify outdoor disconnect cover is latched'],
+          clientConfirmation: ['Present digital diagnostic sheet showing amp draws and delta-T', 'Review warranty coverage with homeowner']
+        },
+        requiredTools: ['Digital manifold gauges', 'Clamp multimeter with inrush capacity', 'Fin comb', 'Condensate pump / nitrogen blow gun'],
+        safetyNotes: ['High voltage discharge risks on dual-run capacitors; always discharge with 20k ohm resistor before touch', 'Handle refrigerants strictly per EPA Section 608 guidelines'],
+        troubleshootingNotes: ['If delta-T is under 14°F, check for restricted return airflow before suspecting refrigerant leak']
+      }
+    ]
+  },
+  {
+    id: 'roofing',
+    name: 'Roofing & Gutters',
+    description: 'Roof inspections, shingle repairs, gutter cleaning, storm damage, and full replacements.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Roof Leak Inspection', 'Gutter Cleaning & Guards', 'Shingle Repair & Ridge Cap', 'Storm Damage Assessment', 'Full Reroof Estimate'],
+    recommendedTone: 'Vigilant, safety-first, durable, and transparent',
+    technicianRoleName: 'Roof Inspector / Specialist',
+    staffRoles: ['Owner / Operator', 'Project Manager', 'Crew Lead', 'Roofer', 'Estimator', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_roof_inspection',
+        serviceType: 'Roof Leak Inspection',
+        industry: 'roofing',
+        checklist: [
+          'Inspect attic interior for water stains, mold, or daylight through decking',
+          'Inspect valley flashing and chimney counter-flashing integrity',
+          'Check pipe boots and neoprene collars for UV dry rot cracks',
+          'Examine shingle granule loss and wind lift creases',
+          'Photograph all identified vulnerability zones'
+        ],
+        workflowSequence: {
+          preCheck: ['Set ladder at 4:1 slope with tie-off stabilizer', 'Inspect pitch and assess harness anchor points'],
+          execute: ['Ground perimeter inspection', 'Eaves and gutter check', 'High-risk flashing inspection', 'Photo documentation'],
+          cleanUp: ['Sweep magnetic roller around yard for loose nails', 'Secure ladder safely'],
+          clientConfirmation: ['Review high-res inspection photos with homeowner on tablet', 'Provide written recommendation and warranty options']
+        },
+        requiredTools: ['Pitch gauge', 'Inspection drone / high-res camera', 'Chalk marker', 'Magnetic sweeper', 'Fall arrest harness'],
+        safetyNotes: ['Never step on wet moss or steep pitches without active fall arrest system', 'Watch for overhead electrical service lines'],
+        troubleshootingNotes: ['If attic stain is 5 feet away from exterior leak, trace water along rafter angle before tearing open shingles']
+      }
+    ]
+  },
+  {
+    id: 'construction',
+    name: 'Construction & Specialty Trades',
+    description: 'Framing, drywall, electrical, plumbing, masonry, concrete, and commercial contracting.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Framing & Structural', 'Concrete Pour & Finish', 'Electrical Rough-in', 'Commercial Tenant Buildout', 'Safety & Code Inspection'],
+    recommendedTone: 'Authoritative, code-compliant, disciplined, and safety-focused',
+    technicianRoleName: 'Site Foreman',
+    staffRoles: ['Owner / Operator', 'Project Manager', 'Site Foreman', 'Tradesperson', 'Apprentice', 'Estimator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_code_inspection',
+        serviceType: 'Safety & Code Inspection',
+        industry: 'construction',
+        checklist: [
+          'Verify posted building permits and OSHA signage',
+          'Inspect scaffolding guardrails and toe boards',
+          'Examine load-bearing anchor bolts and shear wall nailing patterns',
+          'Check fire-stopping caulk around pipe and cable penetrations',
+          'Verify GFCI protection on all temporary power distribution boxes'
+        ],
+        workflowSequence: {
+          preCheck: ['Review stamped architectural blueprints', 'Hold morning site safety briefing with subcontractors'],
+          execute: ['Walk perimeter structural points', 'Review mechanical rough-ins', 'Check electrical tie-ins', 'Document punch-list'],
+          cleanUp: ['Tag out non-compliant equipment', 'Log daily site safety log'],
+          clientConfirmation: ['Deliver signed inspector punch list to general contractor', 'Update timeline in Project Manager workspace']
+        },
+        requiredTools: ['Digital laser measure', 'Code compliance manual', 'Torque wrench', 'GFCI outlet tester', 'Hard hat and steel boots'],
+        safetyNotes: ['OSHA 1926 compliance strictly enforced: hard hats, high-vis, and eye protection required across jobsite', 'Lockout/tagout on live circuits'],
+        troubleshootingNotes: ['If anchor bolts are misaligned in green concrete, consult structural engineer for approved epoxy dowel retrofit']
+      }
+    ]
+  },
+  {
+    id: 'auto_services',
+    name: 'Auto Services & Mobile Mechanics',
+    description: 'Mobile mechanic, auto detailing, brake service, oil changes, and fleet maintenance.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Mobile Oil & Filter Change', 'Brake Pad & Rotor Replacement', 'Battery & Alternator Test', 'Full Mobile Detail', 'Fleet Multi-Point Inspection'],
+    recommendedTone: 'Straightforward, trustworthy, precise, and mechanical',
+    technicianRoleName: 'Certified Auto Mechanic',
+    staffRoles: ['Owner / Operator', 'Shop Manager', 'Master Technician', 'Service Technician', 'Service Advisor', 'Parts Coordinator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_brake_service',
+        serviceType: 'Brake Pad & Rotor Replacement',
+        industry: 'auto_services',
+        checklist: [
+          'Test drive vehicle or inspect pedal feel and stopping distance',
+          'Safely lift and secure vehicle on rated jack stands',
+          'Measure rotor thickness with digital micrometer against minimum spec',
+          'Inspect caliper slide pins, clean and lube with high-temp silicone grease',
+          'Install ceramic brake pads with anti-rattle hardware clips',
+          'Torque lug nuts with calibrated torque wrench to manufacturer specs'
+        ],
+        workflowSequence: {
+          preCheck: ['Chock opposite wheels', 'Verify exact VIN and rotor/pad part numbers before disassembly'],
+          execute: ['Wheel removal', 'Caliper compression and inspection', 'Rotor replacement', 'Hardware lubing and pad seating'],
+          cleanUp: ['Pump brake pedal 4 times before moving vehicle', 'Wipe down greasy fingerprints from rim and door handle'],
+          clientConfirmation: ['Perform 5-stop bedding procedure', 'Show customer old worn pads vs new installed pads']
+        },
+        requiredTools: ['3-ton hydraulic floor jack & rated stands', 'Torque wrench (ft-lbs)', 'Brake caliper piston compressor', 'Digital micrometer'],
+        safetyNotes: ['Never rely solely on hydraulic jack; always use mechanical jack stands', 'Never blow brake dust with air hose; use brake cleaner wash'],
+        troubleshootingNotes: ['If brake pedal feels spongy after installation, bleed fluid system to purge trapped air bubbles']
+      }
+    ]
+  },
+  {
+    id: 'professional_services',
+    name: 'Professional & Scientific Services',
+    description: 'Consulting, engineering, research, design, and technical advisory firms.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Technical Feasibility Study', 'Operational Audit', 'Compliance Review', 'Implementation Roadmap', 'Executive Advisory Session'],
+    recommendedTone: 'Formal, strategic, rigorous, and insight-driven',
+    technicianRoleName: 'Senior Technical Consultant',
+    staffRoles: ['Principal / Owner', 'Account Manager', 'Consultant / Specialist', 'Project Coordinator', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_operational_audit',
+        serviceType: 'Operational Audit',
+        industry: 'professional_services',
+        checklist: [
+          'Collect stakeholder input and standard operating procedures',
+          'Map current workflow bottlenecks and error rates',
+          'Conduct compliance alignment against ISO/industry benchmarks',
+          'Model financial ROI and efficiency gains for proposed interventions',
+          'Draft executive briefing deck with plain-language recommendations'
+        ],
+        workflowSequence: {
+          preCheck: ['Execute mutual NDA', 'Access existing system telemetry and documentation'],
+          execute: ['Stakeholder interviews', 'Data flow mapping', 'Gap analysis', 'Synthesis and roadmap drafting'],
+          cleanUp: ['Sanitize and archive client raw interview notes', 'Review findings internally with Project Manager'],
+          clientConfirmation: ['Deliver executive presentation to client leadership', 'Schedule 30-day implementation review checkpoint']
+        },
+        requiredTools: ['Process mapping software', 'Risk matrix framework', 'Cost-benefit financial model'],
+        safetyNotes: ['Adhere strictly to client data privacy and non-disclosure standards', 'Enforce multi-factor authentication for data transfers'],
+        troubleshootingNotes: ['If stakeholder metrics conflict, triangulate using raw timestamped log data']
+      }
+    ]
+  },
+  {
+    id: 'real_estate',
+    name: 'Real Estate & Property Management',
+    description: 'Realtors, property managers, tenant turnovers, inspections, and staging.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Tenant Move-Out Inspection', 'Listing Prep Walkthrough', 'Rental Turnover Coordination', 'Routine Property Health Check', 'Lease Renewal Outreach'],
+    recommendedTone: 'Responsive, professional, proactive, and polished',
+    technicianRoleName: 'Property Inspector',
+    staffRoles: ['Broker / Owner', 'Listing Agent', "Buyer's Agent", 'Transaction Coordinator', 'Marketing Coordinator', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_turnover_inspection',
+        serviceType: 'Tenant Move-Out Inspection',
+        industry: 'real_estate',
+        checklist: [
+          'Test all smoke and carbon monoxide detectors with expiration dates',
+          'Check under kitchen and bathroom sinks for moisture rings',
+          'Inspect carpet stains and drywall scuffs against move-in condition report',
+          'Test all appliances: stove burners, oven, refrigerator seal, dishwasher cycle',
+          'Collect all keys, mailbox keys, and garage remotes'
+        ],
+        workflowSequence: {
+          preCheck: ['Verify tenant forwarding address and utilities transfer status'],
+          execute: ['Room-by-room photographic survey', 'Meter readings capture', 'Security deposit deduction tally'],
+          cleanUp: ['Lock all windows, deadbolts, and adjust thermostat to eco-mode'],
+          clientConfirmation: ['Email property owner itemized turnover punch list and cost estimate']
+        },
+        requiredTools: ['Inspection checklist tablet', 'Laser distance meter', 'Outlet GFCI tester', 'High-lumen flashlight'],
+        safetyNotes: ['Verify building locks and ensure property is vacant before entering', 'Wear shoe covers on clean carpets'],
+        troubleshootingNotes: ['If strong pet odor detected, schedule subfloor ozone treatment before new carpet installation']
+      }
+    ]
+  },
+  {
+    id: 'general_small_business',
+    name: 'General Small Business',
+    description: 'Versatile operational framework adaptable to any local or service business.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Standard Service Appointment', 'Emergency Service Call', 'Consultation & Estimate', 'Maintenance Check', 'Follow-up Service'],
+    recommendedTone: 'Clear, dependable, polite, and responsive',
+    technicianRoleName: 'Service Specialist',
+    staffRoles: ['Owner', 'Manager', 'Team Member', 'Sales', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_standard_service',
+        serviceType: 'Standard Service Appointment',
+        industry: 'general_small_business',
+        checklist: [
+          'Review client request notes and history',
+          'Perform on-site assessment and confirm scope with client',
+          'Execute required service according to quality guidelines',
+          'Conduct quality check and clean work area',
+          'Collect client sign-off and trigger billing'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm appointment time with client', 'Verify required parts and tools are loaded'],
+          execute: ['On-site arrival notification', 'Service execution', 'Quality verification'],
+          cleanUp: ['Remove all materials and wipe work surfaces', 'Confirm work area is spotless'],
+          clientConfirmation: ['Obtain verbal or signed approval', 'Send digital completion summary']
+        },
+        requiredTools: ['Standard service kit', 'Mobile terminal', 'Digital receipt app'],
+        safetyNotes: ['Follow general workplace safety rules', 'Maintain clear walkways and exits'],
+        troubleshootingNotes: ['If client requests changes beyond original scope, note additional estimate before proceeding']
+      }
+    ]
+  },
+  {
+    id: 'healthcare',
+    name: 'Healthcare, Medical & Dental',
+    description: 'Clinics, dental practices, physical therapy, home health, and wellness practices.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Patient Intake & Screening', 'Hygiene & Sterilization Audit', 'Appointment Reminders & Recalls', 'Insurance Verification', 'Patient Follow-up Care'],
+    recommendedTone: 'Empathetic, reassuring, strictly confidential, and clinical',
+    technicianRoleName: 'Clinical Coordinator',
+    staffRoles: ['Practice Owner', 'Office Manager', 'Provider / Clinician', 'Medical Assistant', 'Front Desk', 'Billing Specialist'],
+    sampleJobPacks: [
+      {
+        id: 'jp_intake_screening',
+        serviceType: 'Patient Intake & Screening',
+        industry: 'healthcare',
+        checklist: [
+          'Verify patient demographic and insurance eligibility',
+          'Review updated medical history and drug allergy flags',
+          'Verify signed HIPAA privacy acknowledgments',
+          'Sterilize patient operatory room and unseal sterile instrument cassette'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm appointment 24 hours prior via SMS', 'Review chart alerts'],
+          execute: ['Patient greeting & vitals check', 'Intake recording', 'Treatment setup'],
+          cleanUp: ['Autoclave sterilization wipe-down', 'Sharps disposal in biohazard container'],
+          clientConfirmation: ['Schedule next recall appointment', 'Send post-care instructions']
+        },
+        requiredTools: ['Sterilization autoclave', 'Digital charting system', 'Blood pressure monitor'],
+        safetyNotes: ['Strict universal precautions: gloves, mask, eye protection', 'Protect patient PHI at all times'],
+        troubleshootingNotes: ['If insurance benefits fail automated verification, call provider portal directly before appointment']
+      }
+    ]
+  },
+  {
+    id: 'legal_accounting',
+    name: 'Legal & Accounting Practices',
+    description: 'Law firms, CPA practices, bookkeepers, and tax advisory services.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Client Intake & Conflict Check', 'Tax Document Preparation', 'Retainer Agreement Drafting', 'Quarterly Financial Review', 'Statutory Compliance Filing'],
+    recommendedTone: 'Rigorous, ethical, confidential, and detail-oriented',
+    technicianRoleName: 'Case / Account Specialist',
+    staffRoles: ['Partner / Owner', 'Attorney / CPA', 'Paralegal / Bookkeeper', 'Legal Assistant', 'Office Manager', 'Intake Coordinator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_client_intake_legal',
+        serviceType: 'Client Intake & Conflict Check',
+        industry: 'legal_accounting',
+        checklist: [
+          'Run conflict of interest check against all parties involved',
+          'Collect identity verification documents',
+          'Draft engagement letter and scope of representation',
+          'Set up trust/retainer accounting ledger',
+          'Establish secure client portal access'
+        ],
+        workflowSequence: {
+          preCheck: ['Review prospective client inquiry', 'Execute conflict screening search'],
+          execute: ['Engagement drafting', 'Retainer fee collection', 'File matter onboarding'],
+          cleanUp: ['Archive conflict search clearance report in matter file'],
+          clientConfirmation: ['Deliver signed retainer counter-copy and onboarding packet']
+        },
+        requiredTools: ['Conflict check database', 'Encrypted document portal', 'Trust accounting ledger'],
+        safetyNotes: ['Strict compliance with ethical attorney-client / accountant privilege', 'Segregate trust funds from operating account immediately'],
+        troubleshootingNotes: ['If conflict check returns related party match, escalate immediately to Executive Assistant for partner review']
+      }
+    ]
+  },
+  {
+    id: 'restaurants',
+    name: 'Restaurants & Food Service',
+    description: 'Cafes, bistros, catering companies, ghost kitchens, and dining establishments.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Catering Package Proposal', 'Health Inspection Pre-Audit', 'Weekly Inventory & Supplier Order', 'Staff Shift Dispatch', 'VIP Guest Experience Follow-up'],
+    recommendedTone: 'Hospitality-driven, appetizing, fast-paced, and food-safety focused',
+    technicianRoleName: 'Kitchen / Ops Lead',
+    staffRoles: ['Owner / Operator', 'General Manager', 'Kitchen Manager', 'Chef / Cook', 'Server', 'Host', 'Bartender'],
+    sampleJobPacks: [
+      {
+        id: 'jp_health_preaudit',
+        serviceType: 'Health Inspection Pre-Audit',
+        industry: 'restaurants',
+        checklist: [
+          'Verify walk-in and low-boy refrigeration temps are under 40°F',
+          'Check hot holding wells maintain minimum 135°F',
+          'Inspect dish machine sanitizer concentration with test strips (50-100 ppm chlorine or 200 ppm quat)',
+          'Check labeling and dating on all prepped food containers',
+          'Ensure handwash sinks have hot water, soap, paper towels, and clean handwashing signs'
+        ],
+        workflowSequence: {
+          preCheck: ['Calibrate food thermometers with ice bath', 'Review local health code checklist'],
+          execute: ['Line walkthrough', 'Storage room check', 'Sanitizer test', 'Temperature log verification'],
+          cleanUp: ['Dispose of any expired prepped goods immediately', 'Mop dry storage floors'],
+          clientConfirmation: ['Sign off daily HACCP compliance sheet']
+        },
+        requiredTools: ['Thermocouple probe thermometer', 'Chemical sanitizer test strips', 'HACCP log tablet'],
+        safetyNotes: ['Never cross-contaminate raw poultry with ready-to-eat foods', 'Maintain unobstructed access to kitchen handwash sinks'],
+        troubleshootingNotes: ['If walk-in temperature creeps above 41°F, inspect evaporator coil for frost and call refrigeration technician immediately']
+      }
+    ]
+  },
+  {
+    id: 'salons_spas',
+    name: 'Salons, Spas & Personal Care',
+    description: 'Hair salons, day spas, barbershops, nail studios, and aesthetic clinics.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['VIP Service Booking', 'Consultation & Skin/Hair Analysis', 'Station Disinfection & Sanitization', 'Package / Membership Sales', 'Post-Service Aftercare Check-in'],
+    recommendedTone: 'Pampering, stylish, warm, and attentive',
+    technicianRoleName: 'Senior Stylist / Aesthetician',
+    staffRoles: ['Owner / Operator', 'Salon Manager', 'Stylist / Therapist', 'Front Desk / Receptionist', 'Assistant'],
+    sampleJobPacks: [
+      {
+        id: 'jp_station_sanitization',
+        serviceType: 'Station Disinfection & Sanitization',
+        industry: 'salons_spas',
+        checklist: [
+          'Submerge combs, shears, and guards in EPA-registered hospital grade disinfectant',
+          'Wipe styling chair, shampoo bowl, and mirror with antibacterial solution',
+          'Place clean, freshly laundered cape and towel at station',
+          'Check client color formula or skin allergy history in client profile'
+        ],
+        workflowSequence: {
+          preCheck: ['Send 2-hour appointment reminder text with parking info'],
+          execute: ['Client consultation', 'Service execution', 'Homecare product recommendation'],
+          cleanUp: ['Sweep hair cuttings immediately into dustpan', 'Sanitize station for next client'],
+          clientConfirmation: ['Schedule 4-week rebooking before client leaves', 'Send automated aftercare text next morning']
+        },
+        requiredTools: ['Barbicide jar & solution', 'Autoclave/UV sterilizer', 'Styling station tools'],
+        safetyNotes: ['Perform skin patch test 24 hours prior for clients receiving new chemical coloring or tint', 'Never use chipped or cracked glass tools'],
+        troubleshootingNotes: ['If client experiences scalp redness, rinse immediately with cool water and apply soothing aloe emulsion']
+      }
+    ]
+  },
+  {
+    id: 'retail_ecommerce',
+    name: 'Retail & E-Commerce',
+    description: 'Boutiques, local specialty stores, online sellers, and omnichannel merchants.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Order Fulfillment & Shipping', 'Product Return / Exchange', 'Inventory Reorder & Restock', 'Promotional Campaign Launch', 'Customer Review Request'],
+    recommendedTone: 'Enthusiastic, helpful, prompt, and brand-forward',
+    technicianRoleName: 'Fulfillment Specialist',
+    staffRoles: ['Owner / Operator', 'Store Manager', 'Sales Associate', 'Warehouse / Fulfillment', 'Customer Support', 'Marketing'],
+    sampleJobPacks: [
+      {
+        id: 'jp_order_fulfillment',
+        serviceType: 'Order Fulfillment & Shipping',
+        industry: 'retail_ecommerce',
+        checklist: [
+          'Pick items from warehouse/backroom matching order slip SKU and size',
+          'Inspect merchandise for flaws, pulls, or manufacturing defects',
+          'Wrap delicately with branded tissue and include thank-you note',
+          'Weigh package on calibrated scale and print carrier shipping label',
+          'Update tracking number in customer order management system'
+        ],
+        workflowSequence: {
+          preCheck: ['Verify shipping address passes postal carrier validation'],
+          execute: ['Accurate item pick', 'Quality inspection', 'Protective pack & label application'],
+          cleanUp: ['Stack outgoing parcels in carrier pickup bin', 'Update inventory count'],
+          clientConfirmation: ['Send customer tracking notification email with delivery estimate']
+        },
+        requiredTools: ['Thermal barcode label printer', 'Digital parcel scale', 'Handheld SKU scanner'],
+        safetyNotes: ['Use box cutters with auto-retractable blades only', 'Lift heavy shipping boxes using leg muscles, not back'],
+        troubleshootingNotes: ['If carrier marks address as undeliverable, send immediate customer SMS to verify apartment number']
+      }
+    ]
+  },
+  {
+    id: 'nonprofits',
+    name: 'Nonprofits & Community Organizations',
+    description: 'Charities, community programs, foundations, and volunteer associations.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Donor Outreach & Stewardship', 'Volunteer Shift Coordination', 'Grant Proposal Tracking', 'Community Event Logistics', 'Impact Report Distribution'],
+    recommendedTone: 'Purpose-driven, grateful, inspiring, and transparent',
+    technicianRoleName: 'Program Coordinator',
+    staffRoles: ['Executive Director', 'Program Manager', 'Volunteer Coordinator', 'Fundraising Lead', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_volunteer_coordination',
+        serviceType: 'Volunteer Shift Coordination',
+        industry: 'nonprofits',
+        checklist: [
+          'Confirm volunteer headcounts and shift roles 48 hours prior',
+          'Prepare sign-in roster and safety liability waivers',
+          'Set up orientation area with volunteer badges and task instructions',
+          'Conduct 10-minute kickoff briefing and safety walkthrough',
+          'Collect shift hours and issue appreciation certificates'
+        ],
+        workflowSequence: {
+          preCheck: ['Send venue directions, parking details, and dress code to volunteers'],
+          execute: ['Check-in & waiver signing', 'Mission kickoff briefing', 'Shift supervision'],
+          cleanUp: ['Return supplies to storage bins', 'Tally total volunteer hours logged'],
+          clientConfirmation: ['Send heartfelt thank-you email with group photo and impact metrics within 24 hours']
+        },
+        requiredTools: ['Tablet check-in app', 'First aid kit', 'Volunteer badges & lanyards'],
+        safetyNotes: ['All volunteers must sign liability waivers and have emergency contacts on file', 'Ensure water and shaded rest breaks are provided'],
+        troubleshootingNotes: ['If volunteer turnout is lower than expected, reassign participants to critical path tasks first']
+      }
+    ]
+  },
+  {
+    id: 'plumbing',
+    name: 'Plumbing & Pipe Restoration',
+    description: 'Residential & commercial plumbing, emergency leak repair, water heaters, drain clearing, and repiping.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Emergency Water Leak Repair', 'Water Heater Replacement', 'Drain Hydro-Jetting & Snaking', 'Sewer Camera Inspection', 'Fixture & Valve Installation'],
+    recommendedTone: 'Responsive, urgent, certified, and clean-handed',
+    technicianRoleName: 'Journeyman Plumber',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Master Plumber', 'Journeyman Plumber', 'Apprentice', 'Dispatcher'],
+    sampleJobPacks: [
+      {
+        id: 'jp_leak_isolation',
+        serviceType: 'Emergency Water Leak Repair',
+        industry: 'plumbing',
+        checklist: [
+          'Locate and shut off main municipal or pressure water supply',
+          'Use acoustic leak detector or thermal camera to trace pipe failure location',
+          'Cut open drywall/ceiling cleanly only in minimum required access square',
+          'Deburr and clean copper/PEX pipe ends and solder or crimp new coupling',
+          'Pressurize line and pressure-test connection for 15 minutes at full head'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm client knows where main shutoff is located', 'Place containment basins and drop cloths'],
+          execute: ['Water isolation', 'Thermal leak tracing', 'Pipe section excision', 'PEX/copper joint coupling installation', 'Static pressure test'],
+          cleanUp: ['Extract any standing moisture with commercial wet vac', 'Bag drywall cutouts neatly', 'Spray antimicrobial inhibitor on damp framing'],
+          clientConfirmation: ['Demonstrate restored dry water pressure to homeowner', 'Provide written warranty on solder/crimp joints']
+        },
+        requiredTools: ['PEX crimp tool', 'Acoustic leak locator', 'Pipe cutter', 'MAPP gas torch / ProPress tool', 'Moisture meter'],
+        safetyNotes: ['Ensure fire shield blanket is positioned behind any torch soldering work near wall studs', 'Depressurize lines before cutting'],
+        troubleshootingNotes: ['If leak recurs after repipe, check water pressure regulator (PRV); pressures over 75 PSI blow seals']
+      }
+    ]
+  },
+  {
+    id: 'electrical',
+    name: 'Electrical Contracting & Smart Power',
+    description: 'Panel upgrades, EV charger installations, rewiring, smart home automation, and safety inspections.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['200A Main Panel Upgrade', 'Level 2 EV Charger Install', 'Whole-Home Rewire & GFCI', 'Smart Lighting & Automation', 'Emergency Circuit Diagnostic'],
+    recommendedTone: 'Methodical, NEC code-compliant, precision-driven, and safety-rigorous',
+    technicianRoleName: 'Master Electrician',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Master Electrician', 'Journeyman Electrician', 'Apprentice', 'Dispatcher', 'Estimator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_ev_charger_install',
+        serviceType: 'Level 2 EV Charger Install',
+        industry: 'electrical',
+        checklist: [
+          'Calculate total home electrical load against panel service capacity',
+          'Mount 50A/60A double-pole circuit breaker in service subpanel',
+          'Run 6/3 NM-B Romex or THHN conduit to designated charging location',
+          'Mount wall charging unit securely into wood stud framing with lag bolts',
+          'Torque lugs to manufacturer specified inch-pounds and verify ground continuity',
+          'Conduct voltage drop and pilot signal handshakes with EV vehicle simulator'
+        ],
+        workflowSequence: {
+          preCheck: ['De-energize main panel and apply OSHA lockout/tagout', 'Test with non-contact voltage tester'],
+          execute: ['Conduit & cable run', 'Breaker installation & torque check', 'Charger terminal landing', 'Ground bonding test'],
+          cleanUp: ['Vacuum metal conduit shavings from floor', 'Label breaker clearly in panel directory index'],
+          clientConfirmation: ['Walk homeowner through smartphone charging app pair', 'Demonstrate 48A high-speed charge rate']
+        },
+        requiredTools: ['Digital multimeter', 'Calibrated torque screwdriver', 'Conduit bender', 'Fish tape', 'Stud finder'],
+        safetyNotes: ['Never work on energized panel buses without arc flash rated PPE', 'Always double-check zero voltage with rated probe'],
+        troubleshootingNotes: ['If breaker trips immediately on car plug-in, inspect neutral-ground bonding in subpanel for illegal bond screw']
+      }
+    ]
+  },
+  {
+    id: 'it_services',
+    name: 'IT Services & Managed Technology (MSP)',
+    description: 'Helpdesk support, cloud migrations, network cybersecurity audits, workstation maintenance, and backup systems.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Managed IT Helpdesk (24/7)', 'Cloud Migration (M365/Google)', 'Cybersecurity Risk Audit', 'Network & WiFi Deployment', 'Disaster Recovery & Backup'],
+    recommendedTone: 'High-tech, dependable, cyber-vigilant, and jargon-free',
+    technicianRoleName: 'Senior Systems Engineer',
+    staffRoles: ['Owner / Principal', 'Service Manager', 'Systems Engineer', 'Helpdesk Technician', 'Network Specialist', 'Account Manager'],
+    sampleJobPacks: [
+      {
+        id: 'jp_cyber_audit',
+        serviceType: 'Cybersecurity Risk Audit',
+        industry: 'it_services',
+        checklist: [
+          'Scan company external IP ranges for open listening ports and vulnerabilities',
+          'Audit multi-factor authentication (MFA) enforcement across all tenant accounts',
+          'Verify immutable cloud backup retention policy and run test restore',
+          'Inspect endpoint antivirus & EDR coverage across all corporate laptops',
+          'Generate executive security risk score report and prioritized remediation roadmap'
+        ],
+        workflowSequence: {
+          preCheck: ['Secure written authorization from client executive leadership before running security scans'],
+          execute: ['Vulnerability scan execution', 'Active directory privilege review', 'Backup recovery dry-run', 'Threat model synthesis'],
+          cleanUp: ['Purge temporary scan artifacts and log files securely'],
+          clientConfirmation: ['Present visual compliance dashboard to C-suite', 'Deliver 30-day remediation action plan']
+        },
+        requiredTools: ['Vulnerability scanner suite', 'Cloud configuration compliance auditor', 'Encrypted audit vault'],
+        safetyNotes: ['Never disclose client credential weaknesses over unencrypted email channels', 'Perform scans during non-peak hours to avoid production downtime'],
+        troubleshootingNotes: ['If backup recovery test fails hash validation, verify cloud storage immutability locking policy and snapshot chain']
+      }
+    ]
+  },
+  {
+    id: 'fitness_gyms',
+    name: 'Fitness Centers, Gyms & Personal Training',
+    description: 'Personal training studios, crossfit gyms, yoga/pilates studios, and athletic conditioning facilities.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['1-on-1 Personal Training Session', 'New Member Fitness Assessment', 'Group Class Enrollment', 'Nutrition & Lifestyle Coaching', 'Gym Floor Safety & Equipment Maintenance'],
+    recommendedTone: 'Motivating, energizing, empowering, and health-first',
+    technicianRoleName: 'Head Coach / Fitness Specialist',
+    staffRoles: ['Owner / Operator', 'General Manager', 'Head Coach / Trainer', 'Personal Trainer', 'Front Desk', 'Class Instructor'],
+    sampleJobPacks: [
+      {
+        id: 'jp_member_assessment',
+        serviceType: 'New Member Fitness Assessment',
+        industry: 'fitness_gyms',
+        checklist: [
+          'Review health intake questionnaire (PAR-Q) and medical release',
+          'Conduct resting vitals, body composition, and movement screening (FMS)',
+          'Identify postural imbalances and joint mobility limitations',
+          'Establish 90-day SMART fitness milestones (strength, endurance, body fat)',
+          'Design custom phase-1 training regimen tailored to client baseline'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm client is hydrated and dressed in athletic footwear', 'Sanitize screening mats and calipers'],
+          execute: ['PAR-Q review', 'Functional movement screen', 'Strength baseline test', 'Goal-setting consultation'],
+          cleanUp: ['Upload biometric scores into client mobile tracking portal'],
+          clientConfirmation: ['Book client first 3 personal training sessions', 'Send warmup video guide via app']
+        },
+        requiredTools: ['Bioimpedance body composition scale', 'Blood pressure monitor', 'Movement screen dowel & mats'],
+        safetyNotes: ['Stop assessment immediately if client experiences dizziness, nausea, or chest pressure', 'Confirm AED defibrillator is inspected weekly'],
+        troubleshootingNotes: ['If client exhibits severe anterior pelvic tilt during squat assessment, program glute activation and hip flexor mobilization before loading']
+      }
+    ]
+  },
+  {
+    id: 'pet_care',
+    name: 'Pet Care, Veterinary & Grooming Services',
+    description: 'Mobile pet grooming, veterinary clinics, doggy daycare, pet boarding, and canine training.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Full-Service Pet Grooming & Spa', 'Veterinary Wellness Exam', 'Dog Daycare & Boarding Intake', 'Canine Behavior Training', 'Vaccine & Microchip Clinic'],
+    recommendedTone: 'Compassionate, gentle, pet-loving, and trustworthy',
+    technicianRoleName: 'Certified Pet Stylist / Vet Tech',
+    staffRoles: ['Owner / Operator', 'Manager', 'Groomer', 'Veterinary Technician', 'Pet Sitter / Walker', 'Receptionist'],
+    sampleJobPacks: [
+      {
+        id: 'jp_pet_grooming',
+        serviceType: 'Full-Service Pet Grooming & Spa',
+        industry: 'pet_care',
+        checklist: [
+          'Verify current rabies and core vaccination records with pet parent',
+          'Conduct pre-groom snout-to-tail health inspection (ears, skin, mats, fleas)',
+          'Hydro-massage bath with hypoallergenic organic oatmeal shampoo',
+          'High-velocity warm air blow dry with eye and ear protective hoods',
+          'Nail dremel grind smooth, sanitary trim, and breed-standard scissor cut'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm pet temperament and any known sensitivities', 'Ensure grooming loop and table restraints are secure'],
+          execute: ['Pre-bath brush out', 'Bath & conditioning', 'Force drying with ear protection', 'Precision scissor styling'],
+          cleanUp: ['Disinfect table surface, blades, and shears with Virkon/Barbicide', 'Sweep hair into sealed bin'],
+          clientConfirmation: ['Present groomed pet with festive bandana', 'Report any discovered ear redness or skin tags to owner']
+        },
+        requiredTools: ['Hydraulic grooming table', 'Variable speed blower', 'Ceramic clipper blades', 'Diamond nail dremel'],
+        safetyNotes: ['Never leave any pet unattended on a grooming table or in a tub', 'Use muzzles only when strictly required for animal/handler safety'],
+        troubleshootingNotes: ['If pet shows extreme anxiety during blow drying, switch to low-speed ambient air and take 5-minute treat breaks']
+      }
+    ]
+  },
+  {
+    id: 'event_production',
+    name: 'Event Planning, Catering & Media Production',
+    description: 'Weddings, corporate conferences, banquet catering, event photography/videography, and audio-visual staging.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Full-Service Event Planning', 'Banquet Catering & Bar Service', 'Event Photography & Cinema', 'Audio/Visual Staging & Lighting', 'Day-Of Event Coordination'],
+    recommendedTone: 'Sophisticated, celebratory, calm under pressure, and flawless',
+    technicianRoleName: 'Event Director / Lead Producer',
+    staffRoles: ['Owner / Producer', 'Event Manager', 'Production Lead', 'AV Technician', 'Coordinator', 'Catering Lead'],
+    sampleJobPacks: [
+      {
+        id: 'jp_event_runofshow',
+        serviceType: 'Day-Of Event Coordination',
+        industry: 'event_production',
+        checklist: [
+          'Distribute minute-by-minute run-of-show timeline to all vendors and stage crew',
+          'Verify banquet seating charts, place cards, and dietary meal markers',
+          'Conduct AV sound check, wireless mic frequency sweep, and video cue test',
+          'Manage vendor load-in arrival schedule and dock parking access',
+          'Coordinate stage transitions, speaker cueing, and live event milestones'
+        ],
+        workflowSequence: {
+          preCheck: ['Sync master clocks across production crew headsets', 'Confirm VIP dressing room amenities'],
+          execute: ['Vendor check-in', 'Full tech rehearsal', 'Guest doors open', 'Run-of-show execution', 'Send-off ceremony'],
+          cleanUp: ['Oversee vendor strike and rental equipment return inventory', 'Conduct venue walkthrough with facility manager'],
+          clientConfirmation: ['Deliver gift box to client/couple', 'Schedule post-event photo/video gallery delivery preview']
+        },
+        requiredTools: ['Production walkie-talkies & headsets', 'Master timeline tablet', 'Emergency event kit', 'Digital audio recorder'],
+        safetyNotes: ['Keep emergency exit doors completely clear of decor or cable trunks', 'Tape down all floor cables with heavy gaffer tape'],
+        troubleshootingNotes: ['If a keynote speaker arrives 20 minutes behind schedule, seamlessly trigger extended cocktail ambient music without announcement']
+      }
+    ]
+  },
+  {
+    id: 'dental_practices',
+    name: 'Dental & Specialized Medical Clinics',
+    description: 'General family dentistry, orthodontics, cosmetic dental clinics, and specialized outpatient care.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Comprehensive Oral Exam & Cleaning', 'Emergency Toothache Visit', 'Cosmetic Whitening / Veneers', 'Orthodontic / Clear Aligner Check', 'Dental Implant Consultation'],
+    recommendedTone: 'Calming, clinically immaculate, gentle, and transparent',
+    technicianRoleName: 'Lead Dental Hygienist / Clinical Coordinator',
+    staffRoles: ['Practice Owner / Dentist', 'Office Manager', 'Dental Hygienist', 'Dental Assistant', 'Front Desk', 'Billing Coordinator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_dental_operatory',
+        serviceType: 'Comprehensive Oral Exam & Cleaning',
+        industry: 'dental_practices',
+        checklist: [
+          'Run ultrasonic cleaning and autoclave sterilization cycle on all dental handpieces',
+          'Review patient medical history, allergies, and blood pressure baseline',
+          'Take digital bitewing X-rays with lead protective thyroid collar',
+          'Perform periodontal probing depth charting and ultrasonic calculus scaling',
+          'Apply fluoride varnish and demonstrate personalized oral hygiene techniques'
+        ],
+        workflowSequence: {
+          preCheck: ['Place barrier film over operatory light handles, air/water syringe, and chair buttons'],
+          execute: ['Patient greeting & health update', 'Diagnostic digital imaging', 'Periodontal cleaning', 'Dentist clinical exam'],
+          cleanUp: ['Dispose of single-use sharps in biohazard container', 'Disinfect dental chair with hospital disinfectant wipes'],
+          clientConfirmation: ['Schedule 6-month recall hygiene reservation', 'Review insurance co-pay estimate at front desk']
+        },
+        requiredTools: ['Digital intraoral sensor & X-ray generator', 'Piezo ultrasonic scaler', 'Class-B vacuum autoclave', 'Periodontal probe'],
+        safetyNotes: ['Strict OSHA/CDC infection control compliance: fresh gloves, masks, and eye shields for every patient', 'Sharps disposed immediately'],
+        troubleshootingNotes: ['If patient presents dental anxiety, offer noise-canceling headphones, warm neck pillow, and step-by-step procedure explanation']
+      }
+    ]
+  },
+  {
+    id: 'moving_storage',
+    name: 'Moving, Storage & Logistics',
+    description: 'Residential home moving, commercial office relocation, crating, storage vaulting, and freight delivery.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Residential Home Move', 'Commercial Office Relocation', 'Full-Service Packing & Crating', 'Short & Long Term Vault Storage', 'Heavy Item & Piano Transport'],
+    recommendedTone: 'Careful, robust, punctual, and highly organized',
+    technicianRoleName: 'Moving Crew Lead / Dispatcher',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Crew Lead', 'Mover / Driver', 'Dispatcher', 'Sales / Estimator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_residential_move',
+        serviceType: 'Residential Home Move',
+        industry: 'moving_storage',
+        checklist: [
+          'Lay down neoprene floor runners and padded door jamb protectors at pickup residence',
+          'Pad wrap and shrink wrap all finished wood furniture, glass tops, and televisions',
+          'Disassemble bed frames, dining table legs, and secure hardware in labeled bags',
+          'Load moving van systematically: tier heavy boxes on bottom, strap uprights every 4 feet',
+          'Deliver to destination, reassemble all furniture, and place items in designated rooms'
+        ],
+        workflowSequence: {
+          preCheck: ['Perform pre-move walkthrough with homeowner, noting pre-existing furniture scratches on digital bill of lading'],
+          execute: ['Floor & wall protection setup', 'Packing & wrapping', 'Truck loading & logistics tie-down', 'Transit', 'Unload & staging'],
+          cleanUp: ['Fold all moving pads and roll up floor runners', 'Remove all used tape and shrink wrap debris from client home'],
+          clientConfirmation: ['Walk through empty rooms with homeowner to confirm zero remaining items', 'Collect digital signature on completed delivery receipt']
+        },
+        requiredTools: ['Moving blankets & stretch film', '4-wheel furniture dollies', 'Appliance hand truck with straps', 'Ratchet load bars'],
+        safetyNotes: ['Bend knees and lift using core muscles; team-lift all items over 60 lbs', 'Deploy truck ramp locks securely before rolling dollies'],
+        troubleshootingNotes: ['If tight staircase prevents king mattress passage, check for alternative balcony access or split box spring conversion']
+      }
+    ]
+  },
+  {
+    id: 'solar_cleanenergy',
+    name: 'Solar Energy & Battery Storage Systems',
+    description: 'Residential & commercial solar photovoltaic installation, Tesla Powerwall storage, EV integration, and grid tie-in.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Rooftop Solar PV Installation', 'Home Battery Storage (Powerwall)', 'Solar System Energy Audit', 'Inverter Replacement & Troubleshooting', 'Solar Panel Cleaning & Maintenance'],
+    recommendedTone: 'Innovative, eco-conscious, mathematically exact, and future-forward',
+    technicianRoleName: 'NABCEP Certified Solar Lead',
+    staffRoles: ['Owner / Operator', 'Project Manager', 'Solar Installer', 'Electrician', 'Site Surveyor', 'Sales Consultant', 'Permit Coordinator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_solar_commissioning',
+        serviceType: 'Rooftop Solar PV Installation',
+        industry: 'solar_cleanenergy',
+        checklist: [
+          'Verify roof rafter structural attachments and lag bolt torque to 35 ft-lbs',
+          'Flash all roof penetrations with code-approved metallic flashing plates',
+          'Snap module rails straight and lay DC wiring in UV-resistant clips',
+          'Install microinverters / DC optimizers and map serial numbers to layout grid',
+          'Test DC open-circuit voltage (Voc) and verify polarity before landing at inverter disconnect',
+          'Submit PTO (Permission to Operate) package to municipal electrical utility'
+        ],
+        workflowSequence: {
+          preCheck: ['Anchor fall protection safety ropes to certified roof ridge anchors', 'Conduct morning tailboard electrical briefing'],
+          execute: ['Stanchion & rail mounting', 'Panel placement & clamping', 'Conduit run & inverter wiring', 'System commissioning test'],
+          cleanUp: ['Sweep roof and grounds with magnetic nail sweeper', 'Seal and paint exterior conduit to match house siding'],
+          clientConfirmation: ['Configure homeowner solar monitoring app on their smartphone', 'Review emergency system shutoff switch location']
+        },
+        requiredTools: ['NABCEP digital solar multimeter', 'Torque wrench with calibration cert', 'Fall arrest harness & ropes', 'MC4 crimp tool'],
+        safetyNotes: ['Solar panels generate lethal DC voltage immediately upon exposure to sunlight; never touch bare conductor ends', 'Tie off 100% on roofs'],
+        troubleshootingNotes: ['If inverter reports ground fault error, measure DC insulation resistance to ground with megohmmeter to isolate pinched wire']
+      }
+    ]
+  },
+  {
+    id: 'marketing_creative',
+    name: 'Marketing Agencies & Creative Studios',
+    description: 'Digital marketing, paid social ad campaigns, SEO, website design, brand development, and video production.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Monthly Retainer Marketing Growth', 'Paid Meta & Google Ads Management', 'SEO & Organic Content Strategy', 'Custom Website Design & Launch', 'Brand Identity & Design System'],
+    recommendedTone: 'Creative, strategic, metric-driven, and high-energy',
+    technicianRoleName: 'Growth Strategist / Creative Director',
+    staffRoles: ['Owner / Principal', 'Account Director', 'Strategist', 'Designer', 'Copywriter', 'Ads Specialist', 'Project Manager'],
+    sampleJobPacks: [
+      {
+        id: 'jp_ad_campaign_launch',
+        serviceType: 'Paid Meta & Google Ads Management',
+        industry: 'marketing_creative',
+        checklist: [
+          'Verify conversion tracking pixels, Google Tag Manager, and server-side CAPI events',
+          'Develop 3 high-converting creative hooks, ad copy variations, and video reels',
+          'Configure campaign target audiences, exclusions, and custom lookalikes',
+          'Set up automated bidding rules to protect target ROAS and cost-per-lead limits',
+          'Launch campaign and conduct day-1 budget pacing & impression share check'
+        ],
+        workflowSequence: {
+          preCheck: ['Review client brand guidelines and verify advertising account billing credit line'],
+          execute: ['Tracking pixel verification', 'Ad set creation', 'A/B creative testing upload', 'Campaign live activation'],
+          cleanUp: ['Archive draft ads and document UTM tracking parameter naming syntax in client master file'],
+          clientConfirmation: ['Send live campaign preview links to client stakeholder with expected 7-day learning phase benchmarks']
+        },
+        requiredTools: ['Meta Ads Manager', 'Google Ads Editor', 'Conversion API test console', 'Creative design suite'],
+        safetyNotes: ['Double-check daily budget decimal points before publishing; avoid accidental overspend spikes', 'Strict adherence to FTC endorsement guidelines'],
+        troubleshootingNotes: ['If ad set stays stuck in learning phase with zero spend, check conversion event trigger volume and broaden audience target']
+      }
+    ]
+  },
+  {
+    id: 'hospitality_rentals',
+    name: 'Hospitality & Short-Term Rental Management',
+    description: 'Airbnb/VRBO property management, boutique hotels, guest turnover operations, and concierge services.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Same-Day Guest Turnover & Staging', '24/7 Guest Concierge & Communication', 'Property Maintenance & Emergency Fix', 'Smart Lock & Keyless Access Dispatch', 'Listing Optimization & Pricing Algorithm'],
+    recommendedTone: 'Luxurious, welcoming, hyper-responsive, and 5-star hospitality',
+    technicianRoleName: 'Hospitality Operations Lead',
+    staffRoles: ['Owner / Host', 'Property Manager', 'Housekeeper', 'Maintenance Technician', 'Guest Coordinator'],
+    sampleJobPacks: [
+      {
+        id: 'jp_turnover_staging',
+        serviceType: 'Same-Day Guest Turnover & Staging',
+        industry: 'hospitality_rentals',
+        checklist: [
+          'Inspect property for any guest damage or left-behind personal belongings',
+          'Strip and launder all bed linens and bath towels at high sanitizing temperature',
+          'Deep clean kitchen, run dishwasher, and empty ice maker tray',
+          'Restock luxury amenities (artisan coffee, shampoo, conditioner, wine welcome gift)',
+          'Reset smart thermostat to welcoming 70°F and update smart lock access PIN for incoming guest',
+          'Upload 15-point staging proof photo log to owner dashboard'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm previous guest has checked out via smart lock log before entering'],
+          execute: ['Damage inspection walkthrough', 'Linen swap & sanitization', 'Deep clean & bathroom reset', 'Welcome staging', 'Smart code reset'],
+          cleanUp: ['Double bag and dispose of all trash in exterior curbside bins', 'Lock all perimeter windows'],
+          clientConfirmation: ['Send incoming guest personalized check-in guide with door code and local restaurant recommendations']
+        },
+        requiredTools: ['Hotel-grade linen pack', 'Smart lock admin app', 'Inspection checklist camera tablet'],
+        safetyNotes: ['Check smoke detectors and carbon monoxide sensors during every turnover', 'Ensure first aid kit and fire extinguisher are inspected'],
+        troubleshootingNotes: ['If WiFi goes offline prior to guest arrival, power-cycle the smart router gateway and test speed on guest network']
+      }
+    ]
+  },
+  {
+    id: 'education_tutoring',
+    name: 'Education, Tutoring & Training Academies',
+    description: 'Private tutoring centers, test prep academies, music & arts schools, STEM learning programs, and language institutes.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Academic Tutoring (1-on-1)', 'Standardized Test Prep (SAT/ACT)', 'Student Learning Style Assessment', 'Curriculum Progress Tracking', 'Parent Milestone Review Conference'],
+    recommendedTone: 'Encouraging, intellectual, structured, and student-focused',
+    technicianRoleName: 'Lead Academic Mentor / Instructor',
+    staffRoles: ['Owner / Director', 'Program Coordinator', 'Lead Tutor / Teacher', 'Tutor', 'Admissions / Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_student_diagnostic',
+        serviceType: 'Student Learning Style Assessment',
+        industry: 'education_tutoring',
+        checklist: [
+          'Administer customized diagnostic skills evaluation in core subject areas',
+          'Identify conceptual learning gaps and strengths through oral reasoning prompts',
+          'Formulate an individualized 12-week learning masterplan with measurable goals',
+          'Assign tailored learning modules and interactive practice resources',
+          'Schedule recurring weekly tutoring timeslot aligned with student study rhythm'
+        ],
+        workflowSequence: {
+          preCheck: ['Review student past report cards, teacher notes, and learning style preferences'],
+          execute: ['Diagnostic testing session', 'Student motivation discussion', 'Curriculum mapping', 'Parent consultation'],
+          cleanUp: ['Record diagnostic score breakdowns in student digital academic portfolio'],
+          clientConfirmation: ['Provide parents with comprehensive written assessment report and 12-week roadmap']
+        },
+        requiredTools: ['Diagnostic testing suite', 'Interactive whiteboarding tablet', 'Student progress tracking portal'],
+        safetyNotes: ['Maintain background check clearances and strict child safety and FERPA privacy compliance across all staff', 'Glass view windows on all tutoring rooms'],
+        troubleshootingNotes: ['If student shows math anxiety during testing, break down complex multi-step problems into visual diagrams']
+      }
+    ]
+  },
+  {
+    id: 'property_operations',
+    name: 'Commercial & Residential Property Management',
+    description: 'Multi-family apartments, commercial office buildings, HOA communities, and industrial facilities operations.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Tenant Move-In / Move-Out Audit', '24/7 Facility Maintenance Dispatch', 'Lease Renewal & Rent Collection', 'Vendor Contract & Bid Management', 'Annual Life-Safety & Code Audit'],
+    recommendedTone: 'Authoritative, proactive, compliance-strict, and community-minded',
+    technicianRoleName: 'Facility Operations Manager',
+    staffRoles: ['Owner / Asset Manager', 'Property Manager', 'Leasing Agent', 'Maintenance Technician', 'Bookkeeper'],
+    sampleJobPacks: [
+      {
+        id: 'jp_facility_audit',
+        serviceType: 'Annual Life-Safety & Code Audit',
+        industry: 'property_operations',
+        checklist: [
+          'Inspect commercial fire alarm pull stations and verify annual certified tag',
+          'Test emergency egress lighting battery backups for 90-second illumination',
+          'Inspect elevator maintenance log and valid municipal certificate of operation',
+          'Verify roof drainage scuppers and stormwater retention drains are clear of debris',
+          'Audit ADA handicap parking stalls and ramp grade signage compliance'
+        ],
+        workflowSequence: {
+          preCheck: ['Notify all building tenants 48 hours in advance regarding life-safety test schedule'],
+          execute: ['Common area walkthrough', 'Mechanical & electrical room audit', 'Fire equipment test', 'Log reconciliation'],
+          cleanUp: ['Stow testing gear and return all elevator controls to normal automated service'],
+          clientConfirmation: ['Submit signed compliance certification to property ownership board and insurer']
+        },
+        requiredTools: ['Emergency light battery load tester', 'Master facility key set', 'Code compliance tablet'],
+        safetyNotes: ['Never bypass or mute fire alarm panels during testing without prior notification to local fire department dispatch', 'Keep electrical rooms locked'],
+        troubleshootingNotes: ['If emergency egress light fails battery illumination test, replace sealed lead-acid battery unit within 24 hours']
+      }
+    ]
+  },
+  {
+    id: 'security_locksmith',
+    name: 'Security Systems, Locksmith & Access Control',
+    description: 'Emergency locksmith, commercial access control cards, smart locks, CCTV surveillance cameras, and alarm systems.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Emergency Lockout & Rekeying', 'Commercial Card Access Control', 'HD Security Camera CCTV Install', 'Smart Lock & Deadbolt Retrofit', 'Intrusion Alarm System Setup'],
+    recommendedTone: 'Discreet, highly secure, rapid response, and certified',
+    technicianRoleName: 'Licensed Master Locksmith / Security Tech',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Locksmith Technician', 'Security Installer', 'Dispatcher', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_access_control_install',
+        serviceType: 'Commercial Card Access Control',
+        industry: 'security_locksmith',
+        checklist: [
+          'Cut clean mortise pocket in commercial metal door jamb for electric strike',
+          'Pull plenum-rated 18/4 shielded security wire through door frame conduit',
+          'Mount RFID / biometric badge reader at standard 42-inch ADA height',
+          'Wire fail-secure power supply with backup gel-cell batteries',
+          'Configure access permissions, door schedules, and audit log tracking in cloud software',
+          'Test crash bar mechanical egress to verify immediate unimpeded emergency exit'
+        ],
+        workflowSequence: {
+          preCheck: ['Verify client legal authority and building ownership before altering access hardware'],
+          execute: ['Jamb preparation & electric strike landing', 'Low-voltage wiring', 'Controller termination', 'Software credential testing'],
+          cleanUp: ['Vacuum metal filing debris from entryway', 'Calibrate door closer speed so door latches securely'],
+          clientConfirmation: ['Enroll building administrator master badges and demonstrate emergency lockdown trigger']
+        },
+        requiredTools: ['Mortise jig & carbide router', 'Digital multimeter', 'Wire fish rods', 'Security bit driver set'],
+        safetyNotes: ['Fire code compliance is paramount: doors must allow free mechanical egress from interior during power outages without keys', 'Wear eye protection while cutting steel frames'],
+        troubleshootingNotes: ['If electric strike buzzes but fails to release, verify power supply provides sufficient inrush amps and check door closer pre-load pressure']
+      }
+    ]
+  },
+  {
+    id: 'pest_control',
+    name: 'Pest Control & Extermination',
+    description: 'General pest treatments, termite inspection and treatment, rodent exclusion, mosquito and tick yard treatments, and bed bug remediation.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['General Pest Treatment', 'Termite Inspection & Treatment', 'Rodent Exclusion', 'Mosquito & Tick Yard Treatment', 'Bed Bug Heat Treatment'],
+    recommendedTone: 'Reassuring, thorough, safety-first, and fast to respond',
+    technicianRoleName: 'Licensed Pest Control Technician',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Pest Control Technician', 'Termite Specialist', 'Dispatcher / Scheduler', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_termite_treatment',
+        serviceType: 'Termite Inspection & Treatment',
+        industry: 'pest_control',
+        checklist: [
+          'Walk the full exterior and probe sill plates, door frames, and foundation joints for mud tubes and hollow wood',
+          'Inspect crawl space and basement for moisture intrusion and prior treatment drill marks',
+          'Map active infestation zones and photograph evidence for the customer report',
+          'Apply labeled termiticide barrier treatment per product label and state regulations',
+          'Install or inspect in-ground monitoring bait stations at labeled intervals',
+          'Leave the customer a written treatment summary, re-treatment warranty terms, and prevention checklist'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm pets and children are clear of treatment zones', 'Verify product label, dilution rate, and state license requirements'],
+          execute: ['Exterior inspection and evidence mapping', 'Barrier treatment application', 'Bait station installation or service'],
+          cleanUp: ['Remove drill dust and debris', 'Secure all chemical containers for transport'],
+          clientConfirmation: ['Walk the customer through findings, treatment zones, and the warranty']
+        },
+        requiredTools: ['Termite probe and moisture meter', 'Power sprayer and calibrated nozzles', 'Drill with masonry bits', 'Bait station auger', 'PPE: respirator, gloves, eye protection'],
+        safetyNotes: ['Never apply termiticide near wells, drains, or waterways except exactly as the product label permits', 'Keep children and pets away from treated soil until dry'],
+        troubleshootingNotes: ['If mud tubes reappear within the warranty window, re-inspect for a missed entry point or plumbing leak feeding moisture to the colony']
+      }
+    ]
+  },
+  {
+    id: 'pool_spa_services',
+    name: 'Pool & Spa Services',
+    description: 'Pool cleaning and chemical balancing, pump and heater repair, salt system conversion, and seasonal pool opening and closing.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Pool Cleaning & Chemical Balancing', 'Pump & Equipment Repair', 'Heater Installation & Repair', 'Pool Opening & Closing', 'Salt System Conversion'],
+    recommendedTone: 'Friendly, reliable, detail-obsessed, and crystal clear',
+    technicianRoleName: 'Certified Pool Technician',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Pool Technician', 'Equipment Repair Specialist', 'Dispatcher / Scheduler', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_pool_equipment_repair',
+        serviceType: 'Pump & Equipment Repair',
+        industry: 'pool_spa_services',
+        checklist: [
+          'Test water chemistry and record chlorine, pH, alkalinity, and calcium hardness before touching equipment',
+          'Inspect pump basket, impeller, seals, and motor for cracks, debris, and bearing noise',
+          'Check filter pressure gauge against clean baseline and backwash or clean cartridges as needed',
+          'Test heater ignition, thermostat, and safety shutoffs; inspect for gas or water leaks',
+          'Prime the pump, verify full circulation, and re-check for leaks at all unions',
+          'Log all readings and parts replaced for the customer service record'
+        ],
+        workflowSequence: {
+          preCheck: ['Shut off power at the breaker before opening any pump or heater housing', 'Confirm gate access and pet status'],
+          execute: ['Water chemistry test', 'Pump and filter diagnosis', 'Part replacement and reassembly', 'Heater safety test'],
+          cleanUp: ['Remove old seals, baskets, and packaging from the equipment pad'],
+          clientConfirmation: ['Show the customer the running system, pressure reading, and chemistry results']
+        },
+        requiredTools: ['Water test kit', 'Pump seal and impeller tools', 'Multimeter', 'PVC primer, cement, and unions', 'Filter cleaning wand'],
+        safetyNotes: ['Never run a pump dry — it destroys the seal in minutes', 'Treat all pool electrical work as live until the breaker is locked out and verified'],
+        troubleshootingNotes: ['If the pump loses prime repeatedly, check the pump lid O-ring and suction-side unions for air leaks before replacing the motor']
+      }
+    ]
+  },
+  {
+    id: 'appliance_repair',
+    name: 'Appliance Repair',
+    description: 'Diagnosis and repair of washers, dryers, refrigerators, ovens, ranges, and dishwashers, including parts replacement.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Washer & Dryer Repair', 'Refrigerator & Freezer Repair', 'Oven & Range Repair', 'Dishwasher Repair', 'Diagnostic & Parts Replacement'],
+    recommendedTone: 'Straightforward, honest about parts and cost, and respectful of the home',
+    technicianRoleName: 'Appliance Repair Technician',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Appliance Repair Technician', 'Parts Coordinator', 'Dispatcher / Scheduler', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_washer_repair',
+        serviceType: 'Washer & Dryer Repair',
+        industry: 'appliance_repair',
+        checklist: [
+          'Ask the customer for the exact symptom, error code, and when it started before opening the machine',
+          'Verify power, water supply valves, and drain hose placement before diagnosing parts',
+          'Run the machine through a short cycle and record noises, leaks, and error codes',
+          'Test the suspect part (pump, belt, valve, control board) with a multimeter before replacing it',
+          'Replace only the failed part, reassemble, and run a full test cycle with no leaks',
+          'Explain the repair, the part warranty, and what to watch for in plain language'
+        ],
+        workflowSequence: {
+          preCheck: ['Unplug the machine and shut off water supply before removing panels', 'Lay down a mat to protect the floor'],
+          execute: ['Symptom interview and test cycle', 'Part testing and replacement', 'Full verification cycle'],
+          cleanUp: ['Wipe down the machine exterior and remove old parts and packaging'],
+          clientConfirmation: ['Run the machine with the customer present and confirm the symptom is gone']
+        },
+        requiredTools: ['Multimeter', 'Nut driver and socket set', 'Pliers and hose clamp tool', 'Appliance dolly and moving straps'],
+        safetyNotes: ['Never bypass a lid switch or thermal fuse to test a machine — both are safety devices', 'Drain standing water before tipping a washer to avoid electrical and floor damage'],
+        troubleshootingNotes: ['If a washer still will not spin after a pump replacement, check the lid switch and drive belt before ordering a control board']
+      }
+    ]
+  },
+  {
+    id: 'garage_door',
+    name: 'Garage Door Services',
+    description: 'Garage door installation, broken spring replacement, opener installation and repair, track and cable repair, and smart garage controls.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Garage Door Installation', 'Broken Spring Replacement', 'Opener Installation & Repair', 'Track & Cable Repair', 'Smart Garage Controls'],
+    recommendedTone: 'Safety-obsessed, prompt, and plain-spoken about cost',
+    technicianRoleName: 'Garage Door Technician',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Garage Door Technician', 'Installer', 'Dispatcher / Scheduler', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_spring_replacement',
+        serviceType: 'Broken Spring Replacement',
+        industry: 'garage_door',
+        checklist: [
+          'Confirm the door is fully closed and secured before touching any spring hardware',
+          'Identify spring type (torsion vs extension), wire size, length, and wind direction',
+          'Release torsion tension with winding bars only — never with screwdrivers or pliers',
+          'Replace both springs as a matched pair when one breaks, and inspect cables, drums, and bearings',
+          'Re-tension to the correct number of turns, lubricate moving parts, and test balance by hand',
+          'Test safety reverse sensors and auto-reverse, then program remotes and keypads'
+        ],
+        workflowSequence: {
+          preCheck: ['Secure the door and disconnect the opener', 'Verify spring measurements against the door weight and height'],
+          execute: ['Tension release', 'Spring and hardware replacement', 'Re-tension and balance test'],
+          cleanUp: ['Remove broken spring fragments and packaging from the garage floor'],
+          clientConfirmation: ['Operate the door with the customer and demonstrate the safety reverse test']
+        },
+        requiredTools: ['Winding bars (matched pair)', 'Vise grips and locking pliers', 'Socket and wrench set', 'Cable and drum tools', 'Lubricant'],
+        safetyNotes: ['Torsion springs store lethal energy: winding bars must be fully seated before every quarter turn, and your body must never be in the spring line of travel', 'Never work on a partially open door held only by the opener'],
+        troubleshootingNotes: ['If the door feels heavy by hand after new springs, re-check the turn count — one missing turn is the most common cause']
+      }
+    ]
+  },
+  {
+    id: 'flooring',
+    name: 'Flooring Installation & Refinishing',
+    description: 'Hardwood installation and refinishing, luxury vinyl plank, tile installation, carpet installation, and floor repair and sanding.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Hardwood Installation & Refinishing', 'Luxury Vinyl Plank', 'Tile Installation', 'Carpet Installation', 'Floor Repair & Sanding'],
+    recommendedTone: 'Craft-focused, careful with the home, and clear about dust and dry times',
+    technicianRoleName: 'Flooring Installer',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Flooring Installer', 'Finishing Specialist', 'Apprentice', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_hardwood_refinish',
+        serviceType: 'Hardwood Installation & Refinishing',
+        industry: 'flooring',
+        checklist: [
+          'Measure moisture content of the wood and subfloor and confirm it is within range before sanding',
+          'Inspect for loose boards, squeaks, pet stains, and prior wax coatings that block adhesion',
+          'Sand in grit progression (coarse to fine), edging and corners included, with dust containment running',
+          'Vacuum and tack the floor twice between sanding and the first finish coat',
+          'Apply stain (if chosen) then finish coats, keeping coats thin and even with proper dry time between them',
+          'Walk the floor in raking light with the customer and note the cure time before furniture returns'
+        ],
+        workflowSequence: {
+          preCheck: ['Protect adjacent rooms with plastic sheeting and confirm ventilation', 'Remove furniture, rugs, and wall hangings from the work area'],
+          execute: ['Moisture check and repair', 'Sanding progression', 'Stain and finish coats'],
+          cleanUp: ['Vacuum all dust from vents, sills, and baseboards before final coat'],
+          clientConfirmation: ['Final walkthrough in raking light and written cure-time instructions']
+        },
+        requiredTools: ['Drum sander and edger', 'Moisture meter', 'Vacuum with fine dust filter', 'Applicator pads and finish', 'Respirator and hearing protection'],
+        safetyNotes: ['Oil-soaked rags can spontaneously combust — lay them flat outdoors or store in a sealed metal container', 'Wear a respirator during all sanding passes'],
+        troubleshootingNotes: ['If finish fisheyes or will not adhere, suspect a prior wax coating — screen, clean with a wax remover, and re-test adhesion on a small area']
+      }
+    ]
+  },
+  {
+    id: 'fence_deck',
+    name: 'Fence & Deck Building',
+    description: 'Wood, vinyl, and chain-link fence installation, deck building and resurfacing, gate and opener installation, and fence repair and staining.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Wood Fence Installation', 'Vinyl & Chain-Link Fencing', 'Deck Building & Resurfacing', 'Gate & Opener Installation', 'Fence Repair & Staining'],
+    recommendedTone: 'Outdoorsy, dependable, and straight about materials and timelines',
+    technicianRoleName: 'Fence & Deck Builder',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Fence & Deck Builder', 'Installer', 'Laborer', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_fence_install',
+        serviceType: 'Wood Fence Installation',
+        industry: 'fence_deck',
+        checklist: [
+          'Confirm property lines, easements, and HOA or permit rules before digging a single hole',
+          'Call 811 and verify all underground utilities are marked along the fence line',
+          'Set corner and end posts first, braced and plumb, then run a string line for the full run',
+          'Set line posts at consistent spacing with concrete footings below frost depth where required',
+          'Hang rails level, attach pickets with consistent gaps, and cap or stain as specified',
+          'Walk the full line with the customer, check every gate latch, and haul away all spoils'
+        ],
+        workflowSequence: {
+          preCheck: ['Utility locate (811) and property line confirmation', 'Material delivery and staging'],
+          execute: ['Post layout and setting', 'Rail and picket installation', 'Gate hanging and hardware'],
+          cleanUp: ['Grade and seed disturbed soil', 'Remove concrete bags and cutoffs from the yard'],
+          clientConfirmation: ['Full-line walkthrough and gate operation demo with the customer']
+        },
+        requiredTools: ['Post hole digger and auger', 'Level and string line', 'Circular saw and nail gun', 'Concrete mixer', 'Gate hardware kit'],
+        safetyNotes: ['Never dig before utilities are marked — a gas or electric strike is the top risk on this job', 'Brace posts before backfilling so a shifting post cannot fall on a worker'],
+        troubleshootingNotes: ['If a gate sags within weeks, the hinge post footing was too shallow or the diagonal brace runs the wrong way — reset the post and re-brace']
+      }
+    ]
+  },
+  {
+    id: 'septic_services',
+    name: 'Septic Services',
+    description: 'Septic tank pumping, septic inspection and certification, drain field repair, septic system installation, and grease trap pumping.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Septic Tank Pumping', 'Septic Inspection & Certification', 'Drain Field Repair', 'Septic System Installation', 'Grease Trap Pumping'],
+    recommendedTone: 'No-nonsense, discreet, and clear about what the system needs and when',
+    technicianRoleName: 'Licensed Septic Technician',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Septic Technician', 'System Installer', 'Dispatcher / Scheduler', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_septic_pumping',
+        serviceType: 'Septic Tank Pumping',
+        industry: 'septic_services',
+        checklist: [
+          'Locate the tank using the as-built drawing, probe, or locator — never guess and dig blind',
+          'Expose lids, inspect risers and baffles, and measure scum and sludge layers before pumping',
+          'Pump both compartments fully, backflush as needed, and inspect the tank walls for cracks or root intrusion',
+          'Check the outlet filter, clean or replace it, and verify flow to the drain field',
+          'Record tank size, gallons pumped, and condition notes for the customer and the county record',
+          'Restore the lawn, close lids securely, and explain the pumping interval in plain terms'
+        ],
+        workflowSequence: {
+          preCheck: ['Confirm tank location and access, and keep children and pets clear of open lids', 'Verify disposal site and manifest requirements'],
+          execute: ['Lid exposure and inspection', 'Pumping and backflush', 'Filter service and flow check'],
+          cleanUp: ['Reseed and grade disturbed turf', 'Disinfect tools and wash down the work area'],
+          clientConfirmation: ['Show the customer the empty tank and filter, and hand over the service report']
+        },
+        requiredTools: ['Vacuum pump truck and hoses', 'Tank probe and lid lifting tools', 'Sludge judge sampler', 'Replacement outlet filters', 'PPE: gloves, boots, eye protection'],
+        safetyNotes: ['Septic gases are toxic and oxygen-displacing — never enter a tank, and keep your head out of an open riser', 'Open lids are a fall hazard: guard them until they are closed again'],
+        troubleshootingNotes: ['If the tank refills abnormally fast after pumping, suspect a leaking toilet or fixture, or a drain field that is no longer absorbing — check indoor fixtures before blaming the tank']
+      }
+    ]
+  },
+  {
+    id: 'tree_service',
+    name: 'Tree Service & Arbor Care',
+    description: 'Tree removal, trimming and pruning, stump grinding, storm damage cleanup, and certified arborist health assessments.',
+    suggestedActiveEmployees: [
+      'executive_assistant', 'sales', 'operations', 'customer_service',
+      'technician', 'finance', 'admin', 'marketing', 'project_manager',
+      'automation_specialist', 'hr', 'business_analyst'
+    ],
+    defaultServices: ['Tree Removal', 'Tree Trimming & Pruning', 'Stump Grinding', 'Storm Damage Cleanup', 'Arborist Health Assessments'],
+    recommendedTone: 'Safety-first, confident, and respectful of the property and neighbors',
+    technicianRoleName: 'Certified Arborist / Tree Climber',
+    staffRoles: ['Owner / Operator', 'Operations Manager', 'Tree Climber', 'Ground Crew Lead', 'Equipment Operator', 'Office Admin'],
+    sampleJobPacks: [
+      {
+        id: 'jp_tree_removal',
+        serviceType: 'Tree Removal',
+        industry: 'tree_service',
+        checklist: [
+          'Assess lean, deadwood, decay, and targets (house, lines, fences) and choose the removal method before cutting',
+          'Confirm power line clearance and call the utility for a drop if any limb is within reach of lines',
+          'Set the drop zone, rope rigging plan, and ground crew positions, and brief every worker on escape routes',
+          'Remove limbs in controlled, rigged sections — never free-fall large wood over a roof or fence',
+          'Fell or crane-lift the trunk in sections, then grind the stump and clean all debris',
+          'Walk the property with the customer and confirm lawn, beds, and structures are undamaged'
+        ],
+        workflowSequence: {
+          preCheck: ['Site hazard assessment and utility clearance', 'Rigging plan and crew safety briefing'],
+          execute: ['Rigged limb removal', 'Trunk sectioning', 'Stump grinding'],
+          cleanUp: ['Chip brush, rake the lawn, and blow off drives and roofs'],
+          clientConfirmation: ['Final property walkthrough with the customer']
+        },
+        requiredTools: ['Climbing saddle, ropes, and rigging gear', 'Chainsaws (top-handle and ground)', 'Stump grinder', 'Chipper and truck', 'PPE: helmet, eye and hearing protection, chaps'],
+        safetyNotes: ['Tree work is high-risk: no one works under a suspended load, and no cutting happens without a clear escape route', 'Keep all workers and bystanders at least two tree lengths from felling operations where possible'],
+        troubleshootingNotes: ['If a rigged limb swings toward a structure, stop, re-tension the rigging, and re-plan the cut — never chase a swinging load with the saw running']
+      }
+    ]
+  }
+];
+
+
+/**
+ * Job positions shown on the registration screen for a given industry.
+ * Falls back to a neutral list when the preset is unknown.
+ */
+export function getStaffRolesForIndustry(presetId: string): string[] {
+  const preset = INDUSTRY_PRESETS.find((p) => p.id === presetId);
+  if (preset && preset.staffRoles && preset.staffRoles.length > 0) {
+    return preset.staffRoles;
+  }
+  return ['Owner', 'Manager', 'Team Member', 'Sales', 'Office Admin'];
+}

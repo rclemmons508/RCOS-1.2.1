@@ -1,0 +1,32 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+*-debug.log
+.gradle/
+app/build/
+.env*
+!.env.example
+.env.local
+
+# Android Generated Assets (rebuilt via npm run build:android-web)
+android/app/src/main/assets/public/assets/*.js
+android/app/src/main/assets/public/assets/*.css
+android/app/src/main/assets/public/assets/*.map
+android/app/build/
+android/.gradle/
+
+# Runtime JSON database + Gmail token store (written by the server; never
+# commit). The server creates data/rcos_db.json on first boot. On Railway,
+# point DATA_DIR at a persistent volume.
+data/*.json
+data/*.json.*
+data/*.bak
+data/*.tmp
+
+# Firebase Android config (google-services.json) — per-project file from
+# the Firebase console; it is placed in android/app/ by hand (see
+# SETUP.md §4) and must never be committed.
+android/app/google-services.json

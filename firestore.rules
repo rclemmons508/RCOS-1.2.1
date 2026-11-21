@@ -1,0 +1,439 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---- Shared Security Helpers ----
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidOptStr(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isValidOptList(data, key, maxLen) {
+      return !(key in data) || (data[key] is list && data[key].size() <= maxLen && (data[key].size() == 0 || data[key][0] is string));
+    }
+
+    function isMemberArray(data) {
+      return data != null &&
+        data.memberUids is list &&
+        data.memberUids.size() >= 1 &&
+        data.memberUids.size() <= 25 &&
+        request.auth.uid in data.memberUids;
+    }
+
+    function isOwnerData(data) {
+      return isSignedIn() && data != null && data.ownerId is string && data.ownerId == request.auth.uid;
+    }
+
+    function isParentMember(businessId) {
+      return isValidId(businessId) &&
+        exists(/databases/$(database)/documents/businesses/$(businessId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/businesses/$(businessId)).data.memberUids;
+    }
+
+    function hasValidCommonSubdocFields(data, businessId) {
+      return data.businessId is string && data.businessId == businessId &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+        data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 25 &&
+        (data.memberUids[0] is string) &&
+        data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // ---- Entity Validation Helpers ----
+    function isValidBusiness(data) {
+      return !('id' in data) &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+        data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 25 &&
+        (data.memberUids[0] is string) &&
+        (!('memberEmails' in data) || data.memberEmails is map) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.industry is string && data.industry.size() >= 1 && data.industry.size() <= 60 &&
+        isValidOptStr(data, 'size', 50) &&
+        isValidOptList(data, 'services', 40) &&
+        isValidOptStr(data, 'pricingApproach', 150) &&
+        isValidOptStr(data, 'brandTone', 150) &&
+        isValidOptStr(data, 'businessKnowledge', 8000) &&
+        isValidOptList(data, 'painPoints', 20) &&
+        isValidOptStr(data, 'serviceArea', 120) &&
+        isValidOptStr(data, 'businessHours', 120) &&
+        (!('emergencyAvailable' in data) || data.emergencyAvailable is bool) &&
+        isValidOptStr(data, 'teamSize', 60) &&
+        (!('servesResidential' in data) || data.servesResidential is bool) &&
+        (!('servesCommercial' in data) || data.servesCommercial is bool) &&
+        isValidOptStr(data, 'contactName', 100) &&
+        isValidOptStr(data, 'contactPhone', 30) &&
+        isValidOptStr(data, 'contactEmail', 120) &&
+        isValidOptStr(data, 'ownerEmail', 120) &&
+        data.autonomyMode in ['supervised', 'autonomous'] &&
+        (!('answeringMode' in data) || data.answeringMode in ['ai', 'manual']) &&
+        (!('aiReceptionistEnabled' in data) || data.aiReceptionistEnabled is bool) &&
+        data.dollarThreshold is number && data.dollarThreshold >= 0 && data.dollarThreshold <= 1000000 &&
+        (!('activeEmployees' in data) || data.activeEmployees is map) &&
+        (!('employeeTones' in data) || data.employeeTones is map) &&
+        isValidOptList(data, 'availableDepartments', 10) &&
+        (!('onboardingCompleted' in data) || data.onboardingCompleted is bool) &&
+        isValidOptStr(data, 'subscriptionTier', 40) &&
+        data.createdAt is timestamp && data.createdAt <= request.time &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidJob(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.clientName is string && data.clientName.size() >= 1 && data.clientName.size() <= 100 &&
+        isValidOptStr(data, 'clientPhone', 30) &&
+        isValidOptStr(data, 'clientId', 128) &&
+        isValidOptStr(data, 'address', 200) &&
+        data.status in ['unassigned', 'dispatched', 'in_progress', 'completed', 'urgent'] &&
+        data.priority in ['low', 'medium', 'high', 'critical'] &&
+        isValidOptStr(data, 'assignedTechnician', 100) &&
+        data.estimatedValue is number && data.estimatedValue >= 0 && data.estimatedValue <= 1000000 &&
+        data.scheduledDate is string && data.scheduledDate.size() <= 20 &&
+        data.scheduledTime is string && data.scheduledTime.size() <= 40 &&
+        isValidOptStr(data, 'durationLabel', 30) &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+        isValidOptStr(data, 'description', 2000) &&
+        isValidOptStr(data, 'aiNotes', 2000) &&
+        isValidOptStr(data, 'invoiceId', 128);
+    }
+
+    function isValidCustomer(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        isValidOptStr(data, 'company', 100) &&
+        isValidOptStr(data, 'phone', 30) &&
+        isValidOptStr(data, 'email', 120) &&
+        isValidOptStr(data, 'address', 200) &&
+        data.status in ['active', 'lead', 'vip', 'inactive'] &&
+        (!('healthScore' in data) || (data.healthScore is int && data.healthScore >= 0 && data.healthScore <= 100)) &&
+        (!('totalSpent' in data) || (data.totalSpent is number && data.totalSpent >= 0 && data.totalSpent <= 10000000)) &&
+        (!('activeJobsCount' in data) || (data.activeJobsCount is int && data.activeJobsCount >= 0 && data.activeJobsCount <= 1000)) &&
+        isValidOptStr(data, 'lastContactDate', 40) &&
+        isValidOptStr(data, 'serviceType', 100) &&
+        isValidOptStr(data, 'aiSummary', 1000) &&
+        isValidOptList(data, 'tags', 15);
+    }
+
+    function isValidTask(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        isValidOptStr(data, 'subtitle', 200) &&
+        isValidOptStr(data, 'dueTimeLabel', 40) &&
+        data.bucket in ['today', 'this_week'] &&
+        data.category in ['call', 'quote', 'schedule', 'follow_up', 'job_check'] &&
+        data.completed is bool &&
+        isValidOptStr(data, 'relatedCustomerName', 100);
+    }
+
+    function isValidCall(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 100 &&
+        data.callerNumber is string && data.callerNumber.size() >= 1 && data.callerNumber.size() <= 30 &&
+        data.direction in ['inbound', 'outbound', 'missed'] &&
+        data.status in ['active', 'completed', 'missed', 'voicemail', 'transferred'] &&
+        isValidOptStr(data, 'durationLabel', 30) &&
+        isValidOptStr(data, 'timeLabel', 40) &&
+        isValidOptStr(data, 'summary', 1000) &&
+        data.answeredBy in ['ai_receptionist', 'human_operator'];
+    }
+
+    function isValidVoicemail(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 100 &&
+        data.callerNumber is string && data.callerNumber.size() >= 1 && data.callerNumber.size() <= 30 &&
+        isValidOptStr(data, 'durationLabel', 30) &&
+        data.transcription is string && data.transcription.size() <= 2000 &&
+        isValidOptStr(data, 'summary', 500) &&
+        data.urgency in ['low', 'medium', 'high', 'urgent'] &&
+        data.reviewed is bool;
+    }
+
+    function isValidRequest(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 100 &&
+        isValidOptStr(data, 'customerPhone', 30) &&
+        isValidOptStr(data, 'customerEmail', 120) &&
+        isValidOptStr(data, 'serviceLocation', 200) &&
+        data.serviceType is string && data.serviceType.size() >= 1 && data.serviceType.size() <= 100 &&
+        isValidOptStr(data, 'description', 2000) &&
+        data.urgency in ['routine', 'soon', 'urgent', 'emergency'] &&
+        isValidOptStr(data, 'preferredDateTime', 100) &&
+        data.stage is string && data.stage.size() <= 40 &&
+        data.status in ['pending', 'in_progress', 'completed', 'cancelled'];
+    }
+
+    function isValidAction(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        isValidOptStr(data, 'requestId', 128) &&
+        data.employeeId is string && data.employeeId.size() >= 1 && data.employeeId.size() <= 50 &&
+        data.actionType is string && data.actionType.size() >= 1 && data.actionType.size() <= 40 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        isValidOptStr(data, 'summary', 1000) &&
+        isValidOptStr(data, 'clientName', 100) &&
+        data.status in ['queued', 'running', 'awaiting_approval', 'approved', 'rejected', 'completed', 'failed'] &&
+        data.riskCategory is string && data.riskCategory.size() >= 1 && data.riskCategory.size() <= 40 &&
+        data.requiresApproval is bool &&
+        data.dollarAmount is number && data.dollarAmount >= 0 && data.dollarAmount <= 1000000 &&
+        isValidOptStr(data, 'draftContent', 4000) &&
+        isValidOptStr(data, 'invoiceNumber', 40) &&
+        isValidOptStr(data, 'dueDate', 40) &&
+        data.paymentStatus in ['paid', 'unpaid'] &&
+        isValidOptStr(data, 'reviewerNote', 500) &&
+        isValidOptStr(data, 'decidedBy', 120) &&
+        isValidOptStr(data, 'scheduledJobId', 128);
+    }
+
+    function isValidChatMessage(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
+        isValidOptStr(data, 'senderName', 100) &&
+        data.employeeId is string && data.employeeId.size() >= 1 && data.employeeId.size() <= 50 &&
+        data.role in ['user', 'assistant', 'model'] &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 8000 &&
+        isValidOptStr(data, 'modelUsed', 80);
+    }
+
+    function isValidTeamMessage(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.senderId is string && data.senderId == request.auth.uid &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 100 &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 4000;
+    }
+
+    function isValidAgentMessage(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.agentId is string && data.agentId.size() >= 1 && data.agentId.size() <= 50 &&
+        data.kind in ['alert', 'suggestion', 'question'] &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+        data.body is string && data.body.size() >= 1 && data.body.size() <= 1500 &&
+        data.status in ['unread', 'read', 'answered', 'dismissed'] &&
+        isValidOptStr(data, 'actionLabel', 60) &&
+        isValidOptStr(data, 'actionRoute', 40);
+    }
+
+    function isValidAuditLog(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.actionId is string && data.actionId.size() >= 1 && data.actionId.size() <= 128 &&
+        data.userId is string && data.userId == request.auth.uid &&
+        data.actionType is string && data.actionType.size() >= 1 && data.actionType.size() <= 40 &&
+        data.decision is string && data.decision.size() >= 1 && data.decision.size() <= 40 &&
+        data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 500;
+    }
+
+    // ---- Businesses Collection & Subcollections ----
+    match /businesses/{businessId} {
+      allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+      allow get: if isSignedIn() && isValidId(businessId) && isMemberArray(existing());
+
+      allow create: if isSignedIn() &&
+        isValidId(businessId) &&
+        isValidBusiness(incoming()) &&
+        incoming().ownerId == request.auth.uid &&
+        request.auth.uid in incoming().memberUids;
+
+      allow update: if isSignedIn() &&
+        isValidId(businessId) &&
+        isValidBusiness(incoming()) &&
+        isOwnerData(existing()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'serviceArea', 'businessHours', 'businessKnowledge',
+          'autonomyMode', 'dollarThreshold', 'aiReceptionistEnabled', 'answeringMode',
+          'activeEmployees', 'employeeTones', 'services', 'pricingApproach', 'brandTone',
+          'updatedAt'
+        ]);
+
+      allow delete: if isSignedIn() && isValidId(businessId) && isOwnerData(existing());
+
+      match /jobs/{jobId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(jobId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(jobId) && isValidJob(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(jobId) && isValidJob(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          existing().status != 'completed' &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'aiNotes', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(jobId) && isOwnerData(existing());
+      }
+
+      match /customers/{customerId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(customerId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(customerId) && isValidCustomer(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(customerId) && isValidCustomer(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'phone', 'email', 'address', 'aiSummary', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(customerId) && isOwnerData(existing());
+      }
+
+      match /tasks/{taskId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(taskId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(taskId) && isValidTask(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(taskId) && isValidTask(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(taskId) && isMemberArray(existing());
+      }
+
+      match /calls/{callId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(callId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(callId) && isValidCall(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(callId) && isOwnerData(existing());
+      }
+
+      match /voicemails/{voicemailId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(voicemailId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(voicemailId) && isValidVoicemail(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(voicemailId) && isValidVoicemail(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(voicemailId) && isOwnerData(existing());
+      }
+
+      match /requests/{requestId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(requestId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(requestId) && isValidRequest(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(requestId) && isValidRequest(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          existing().status != 'completed' &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'stage', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(requestId) && isOwnerData(existing());
+      }
+
+      match /actions/{actionId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(actionId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(actionId) && isValidAction(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(actionId) && isValidAction(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            // Owner approval/decline decision from awaiting_approval / queued
+            (existing().status in ['awaiting_approval', 'queued'] &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'decidedBy', 'draftContent', 'dollarAmount', 'reviewerNote', 'scheduledJobId', 'updatedAt'
+              ])) ||
+            // Mark approved/completed invoice paid
+            (existing().status in ['approved', 'awaiting_approval'] &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'status', 'updatedAt'])) ||
+            // Link scheduled job inside approval transaction
+            (existing().status == 'approved' &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['scheduledJobId', 'updatedAt']))
+          );
+        allow delete: if isSignedIn() && isValidId(actionId) && isOwnerData(existing());
+      }
+
+      match /chatMessages/{messageId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(messageId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(messageId) && isValidChatMessage(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(messageId) && isOwnerData(existing());
+      }
+
+      match /teamMessages/{messageId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(messageId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(messageId) && isValidTeamMessage(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(messageId) && isOwnerData(existing());
+      }
+
+      match /agentMessages/{messageId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(messageId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(messageId) && isValidAgentMessage(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(messageId) && isValidAgentMessage(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(messageId) && isOwnerData(existing());
+      }
+
+      match /auditLogs/{logId} {
+        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow get: if isSignedIn() && isValidId(logId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(logId) && isOwnerData(existing());
+      }
+    }
+  }
+}

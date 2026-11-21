@@ -1,0 +1,335 @@
+{
+  "entities": {
+    "BusinessAccount": {
+      "title": "Business Account",
+      "description": "Tenant business workspace profile and operational safety configuration",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "description": "Firebase Auth UID of the business owner" },
+        "memberUids": { "type": "array", "description": "Bounded array of member Firebase Auth UIDs (max 25)" },
+        "memberEmails": { "type": "object", "description": "Map of lowercase verified email to role" },
+        "name": { "type": "string" },
+        "industry": { "type": "string" },
+        "size": { "type": "string" },
+        "services": { "type": "array" },
+        "pricingApproach": { "type": "string" },
+        "brandTone": { "type": "string" },
+        "businessKnowledge": { "type": "string" },
+        "painPoints": { "type": "array" },
+        "serviceArea": { "type": "string" },
+        "businessHours": { "type": "string" },
+        "emergencyAvailable": { "type": "boolean" },
+        "teamSize": { "type": "string" },
+        "servesResidential": { "type": "boolean" },
+        "servesCommercial": { "type": "boolean" },
+        "contactName": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "ownerEmail": { "type": "string" },
+        "autonomyMode": { "type": "string", "enum": ["supervised", "autonomous"] },
+        "answeringMode": { "type": "string", "enum": ["ai", "manual"] },
+        "aiReceptionistEnabled": { "type": "boolean" },
+        "dollarThreshold": { "type": "number" },
+        "activeEmployees": { "type": "object" },
+        "employeeTones": { "type": "object" },
+        "availableDepartments": { "type": "array" },
+        "onboardingCompleted": { "type": "boolean" },
+        "subscriptionTier": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp written via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp written via FieldValue.serverTimestamp()" }
+      },
+      "required": ["ownerId", "memberUids", "name", "industry", "autonomyMode", "dollarThreshold", "createdAt", "updatedAt"]
+    },
+    "Job": {
+      "title": "Scheduled Job / Appointment",
+      "description": "Field dispatch and schedule item",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "title": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "clientId": { "type": "string" },
+        "address": { "type": "string" },
+        "status": { "type": "string", "enum": ["unassigned", "dispatched", "in_progress", "completed", "urgent"] },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "assignedTechnician": { "type": "string" },
+        "estimatedValue": { "type": "number" },
+        "scheduledDate": { "type": "string" },
+        "scheduledTime": { "type": "string" },
+        "durationLabel": { "type": "string" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "aiNotes": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "title", "clientName", "status", "priority", "estimatedValue", "createdAt", "updatedAt"]
+    },
+    "Customer": {
+      "title": "Customer Profile",
+      "description": "Client CRM record",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "name": { "type": "string" },
+        "company": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "lead", "vip", "inactive"] },
+        "healthScore": { "type": "integer" },
+        "totalSpent": { "type": "number" },
+        "activeJobsCount": { "type": "integer" },
+        "lastContactDate": { "type": "string" },
+        "serviceType": { "type": "string" },
+        "aiSummary": { "type": "string" },
+        "tags": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "name", "status", "createdAt", "updatedAt"]
+    },
+    "FieldTask": {
+      "title": "Field Task",
+      "description": "Operational checklist task",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "dueTimeLabel": { "type": "string" },
+        "bucket": { "type": "string", "enum": ["today", "this_week"] },
+        "category": { "type": "string", "enum": ["call", "quote", "schedule", "follow_up", "job_check"] },
+        "completed": { "type": "boolean" },
+        "relatedCustomerName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "title", "bucket", "category", "completed", "createdAt", "updatedAt"]
+    },
+    "CallRecord": {
+      "title": "Call Log Record",
+      "description": "Inbound/outbound phone activity record",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "callerName": { "type": "string" },
+        "callerNumber": { "type": "string" },
+        "direction": { "type": "string", "enum": ["inbound", "outbound", "missed"] },
+        "status": { "type": "string", "enum": ["active", "completed", "missed", "voicemail", "transferred"] },
+        "durationLabel": { "type": "string" },
+        "timeLabel": { "type": "string" },
+        "summary": { "type": "string" },
+        "answeredBy": { "type": "string", "enum": ["ai_receptionist", "human_operator"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "callerName", "callerNumber", "direction", "status", "createdAt", "updatedAt"]
+    },
+    "VoicemailRecord": {
+      "title": "Voicemail Record",
+      "description": "Transcribed voicemail item",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "callerName": { "type": "string" },
+        "callerNumber": { "type": "string" },
+        "durationLabel": { "type": "string" },
+        "transcription": { "type": "string" },
+        "summary": { "type": "string" },
+        "urgency": { "type": "string", "enum": ["low", "medium", "high", "urgent"] },
+        "reviewed": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "callerName", "callerNumber", "transcription", "reviewed", "createdAt", "updatedAt"]
+    },
+    "CustomerRequest": {
+      "title": "Customer Intake Request",
+      "description": "Service request intake record",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "serviceLocation": { "type": "string" },
+        "serviceType": { "type": "string" },
+        "description": { "type": "string" },
+        "urgency": { "type": "string", "enum": ["routine", "soon", "urgent", "emergency"] },
+        "preferredDateTime": { "type": "string" },
+        "stage": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "customerName", "serviceType", "status", "createdAt", "updatedAt"]
+    },
+    "ActionRecord": {
+      "title": "Quote, Invoice & Approval Record",
+      "description": "Human-in-the-loop gated action or billing draft",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "requestId": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "actionType": { "type": "string" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "clientName": { "type": "string" },
+        "status": { "type": "string", "enum": ["queued", "running", "awaiting_approval", "approved", "rejected", "completed", "failed"] },
+        "riskCategory": { "type": "string" },
+        "requiresApproval": { "type": "boolean" },
+        "dollarAmount": { "type": "number" },
+        "draftContent": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "paymentStatus": { "type": "string", "enum": ["paid", "unpaid"] },
+        "reviewerNote": { "type": "string" },
+        "decidedBy": { "type": "string" },
+        "scheduledJobId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "employeeId", "actionType", "title", "status", "riskCategory", "requiresApproval", "dollarAmount", "createdAt", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "AI Assistant Chat Message",
+      "description": "Conversation entry with AI employee",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "assistant", "model"] },
+        "text": { "type": "string" },
+        "modelUsed": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "senderId", "employeeId", "role", "text", "createdAt", "updatedAt"]
+    },
+    "TeamMessage": {
+      "title": "Team Chat Message",
+      "description": "Internal crew collaboration message",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "senderId", "senderName", "text", "createdAt", "updatedAt"]
+    },
+    "AgentInboxMessage": {
+      "title": "Agent Proactive Alert",
+      "description": "Proactive briefing or notification from an AI specialist",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "agentId": { "type": "string" },
+        "kind": { "type": "string", "enum": ["alert", "suggestion", "question"] },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "status": { "type": "string", "enum": ["unread", "read", "answered", "dismissed"] },
+        "actionLabel": { "type": "string" },
+        "actionRoute": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "agentId", "kind", "title", "body", "status", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "Audit Log Entry",
+      "description": "Immutable approval decision audit record",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "actionId": { "type": "string" },
+        "userId": { "type": "string" },
+        "actionType": { "type": "string" },
+        "decision": { "type": "string" },
+        "summary": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessId", "ownerId", "memberUids", "actionId", "userId", "actionType", "decision", "summary", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/businesses/{businessId}": {
+      "schema": "BusinessAccount",
+      "description": "Multi-business workspaces scoped by ownerId and memberUids"
+    },
+    "/businesses/{businessId}/jobs/{jobId}": {
+      "schema": "Job",
+      "description": "Scheduled appointments and field jobs"
+    },
+    "/businesses/{businessId}/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "CRM customer records"
+    },
+    "/businesses/{businessId}/tasks/{taskId}": {
+      "schema": "FieldTask",
+      "description": "Operational checklist tasks"
+    },
+    "/businesses/{businessId}/calls/{callId}": {
+      "schema": "CallRecord",
+      "description": "Call activity logs"
+    },
+    "/businesses/{businessId}/voicemails/{voicemailId}": {
+      "schema": "VoicemailRecord",
+      "description": "Voicemail transcripts"
+    },
+    "/businesses/{businessId}/requests/{requestId}": {
+      "schema": "CustomerRequest",
+      "description": "Incoming customer service requests"
+    },
+    "/businesses/{businessId}/actions/{actionId}": {
+      "schema": "ActionRecord",
+      "description": "Quotes, invoices, and human-in-the-loop approval queue"
+    },
+    "/businesses/{businessId}/chatMessages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "AI Assistant chat history"
+    },
+    "/businesses/{businessId}/teamMessages/{messageId}": {
+      "schema": "TeamMessage",
+      "description": "Team collaboration chat"
+    },
+    "/businesses/{businessId}/agentMessages/{messageId}": {
+      "schema": "AgentInboxMessage",
+      "description": "Proactive AI briefings and notifications"
+    },
+    "/businesses/{businessId}/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Append-only approval audit records"
+    }
+  }
+}
