@@ -312,27 +312,35 @@ fun ScheduleScreen(
                     jobPack.checklist.take(3).forEach { step ->
                         Text("• $step", style = MaterialTheme.typography.bodyMedium, color = AuroraTextSecondary)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        AuroraFilterPill(
-                            label = "In Progress",
-                            selected = job.status == JobStatus.IN_PROGRESS.code,
-                            testTag = "job_status_inprogress",
-                            onClick = {
-                                onUpdateJobStatus(job, JobStatus.IN_PROGRESS)
-                                selectedJob = null
-                            },
-                            modifier = Modifier.weight(1f)
+                    if (job.status == JobStatus.COMPLETED.code) {
+                        Text(
+                            text = "Job Completed (status locked)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AuroraEmerald
                         )
-                        AuroraFilterPill(
-                            label = "Complete",
-                            selected = job.status == JobStatus.COMPLETED.code,
-                            testTag = "job_status_complete",
-                            onClick = {
-                                onUpdateJobStatus(job, JobStatus.COMPLETED)
-                                selectedJob = null
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            AuroraFilterPill(
+                                label = "In Progress",
+                                selected = job.status == JobStatus.IN_PROGRESS.code,
+                                testTag = "job_status_inprogress",
+                                onClick = {
+                                    onUpdateJobStatus(job, JobStatus.IN_PROGRESS)
+                                    selectedJob = null
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                            AuroraFilterPill(
+                                label = "Complete",
+                                selected = false,
+                                testTag = "job_status_complete",
+                                onClick = {
+                                    onUpdateJobStatus(job, JobStatus.COMPLETED)
+                                    selectedJob = null
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                     TextButton(onClick = {
                         selectedJob = null

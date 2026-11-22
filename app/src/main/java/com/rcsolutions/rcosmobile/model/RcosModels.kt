@@ -168,7 +168,7 @@ data class BusinessAccount(
             put("memberEmails", emailMap.ifEmpty { memberEmails })
             put("name", name.trim().take(100).ifEmpty { "RC Solutions" })
             put("industry", industry.trim().take(60).ifEmpty { "general_small_business" })
-            put("size", size.trim().take(50).ifEmpty { null })
+            put("size", this@BusinessAccount.size.trim().take(50).ifEmpty { null })
             put("services", services.take(40))
             put("pricingApproach", pricingApproach.trim().take(150).ifEmpty { null })
             put("brandTone", brandTone.trim().take(150).ifEmpty { null })

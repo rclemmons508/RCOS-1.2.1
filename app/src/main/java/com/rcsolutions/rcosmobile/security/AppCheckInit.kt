@@ -53,7 +53,7 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 val siteKey = context.getString(resId)
                 if (siteKey.isNotBlank()) {
                     FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                        RecaptchaAppCheckProviderFactory.getInstance()
                     )
                     Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
                 } else {
