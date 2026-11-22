@@ -1,7 +1,12 @@
 package com.rcsolutions.rcosmobile.ui.screens
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -22,14 +27,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CallEnd
+import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.HeadsetMic
 import androidx.compose.material.icons.outlined.Phone
 import androidx.compose.material.icons.outlined.PhoneCallback
 import androidx.compose.material.icons.outlined.PhoneMissed
 import androidx.compose.material.icons.outlined.Voicemail
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -49,10 +58,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.rcsolutions.rcosmobile.model.BusinessAccount
 import com.rcsolutions.rcosmobile.model.CallDirection
 import com.rcsolutions.rcosmobile.model.CallRecord
 import com.rcsolutions.rcosmobile.model.CallStatus
+import com.rcsolutions.rcosmobile.model.LiveVoiceStatus
+import com.rcsolutions.rcosmobile.model.LiveVoiceUiState
 import com.rcsolutions.rcosmobile.model.VoicemailRecord
 import com.rcsolutions.rcosmobile.ui.components.AuroraCard
 import com.rcsolutions.rcosmobile.ui.components.AuroraDivider
@@ -82,7 +94,10 @@ fun CallsScreen(
     business: BusinessAccount?,
     calls: List<CallRecord>,
     voicemails: List<VoicemailRecord>,
+    liveVoiceState: LiveVoiceUiState,
     onToggleAiReceptionist: (Boolean) -> Unit,
+    onStartLiveReceptionistCall: () -> Unit,
+    onStopLiveReceptionistCall: () -> Unit,
     onLogCall: (callerName: String, phone: String, direction: CallDirection, status: CallStatus, duration: String, summary: String) -> Unit,
     onMarkVoicemailReviewed: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -91,6 +106,18 @@ fun CallsScreen(
     var selectedFilter by remember { mutableStateOf(CallFilter.ALL) }
     var showMakeCallDialog by remember { mutableStateOf(false) }
     var showFullLogDialog by remember { mutableStateOf(false) }
+    var micDeniedMessage by remember { mutableStateOf<String?>(null) }
+
+    val micLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            micDeniedMessage = null
+            onStartLiveReceptionistCall()
+        } else {
+            micDeniedMessage = "Microphone permission is required to talk live with the AI Receptionist."
+        }
+    }
 
     val aiEnabled = business?.aiReceptionistEnabled ?: true
 
@@ -206,6 +233,62 @@ fun CallsScreen(
                                 checkedThumbColor = AuroraOnEmerald,
                                 checkedTrackColor = AuroraEmerald
                             )
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    val isLive = liveVoiceState.status == LiveVoiceStatus.LIVE ||
+                        liveVoiceState.status == LiveVoiceStatus.CONNECTING
+                    OutlinedButton(
+                        onClick = {
+                            if (isLive) {
+                                onStopLiveReceptionistCall()
+                            } else {
+                                val granted = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (granted) {
+                                    micDeniedMessage = null
+                                    onStartLiveReceptionistCall()
+                                } else {
+                                    micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, if (isLive) AuroraRed else AuroraEmerald),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isLive) AuroraRed.copy(alpha = 0.14f) else AuroraEmerald.copy(alpha = 0.14f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .testTag("calls_live_ai_voice_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isLive) Icons.Outlined.CallEnd else Icons.Outlined.GraphicEq,
+                            contentDescription = null,
+                            tint = if (isLive) AuroraRed else AuroraEmerald,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = when (liveVoiceState.status) {
+                                LiveVoiceStatus.CONNECTING -> "Connecting to Gemini 3.8 Live..."
+                                LiveVoiceStatus.LIVE -> "End Live AI Voice (${liveVoiceState.durationSeconds}s)"
+                                else -> "Talk Live with AI Receptionist (gemini-3.8-live)"
+                            },
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (isLive) AuroraRed else AuroraEmerald
+                        )
+                    }
+                    val errText = micDeniedMessage ?: liveVoiceState.error
+                    if (!errText.isNullOrBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = errText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuroraRed
                         )
                     }
                 }

@@ -75,6 +75,7 @@ import androidx.navigation.compose.rememberNavController
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.rcsolutions.rcosmobile.data.AiRepository
+import com.rcsolutions.rcosmobile.data.LiveVoiceManager
 import com.rcsolutions.rcosmobile.data.RcosRepository
 import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
 import com.rcsolutions.rcosmobile.data.WeatherService
@@ -191,6 +192,7 @@ private fun RcosAppRoot() {
                             repository = RcosRepository(appContext),
                             prefsRepo = UserPreferencesRepository(appContext),
                             aiRepo = AiRepository(),
+                            liveVoiceManager = LiveVoiceManager(),
                             weatherService = WeatherService(),
                             currentUserId = uid,
                             currentUserEmail = user.email.orEmpty(),
@@ -236,6 +238,7 @@ private fun AuthenticatedAuroraShell(
     val agentMessagesState by viewModel.agentMessagesState.collectAsStateWithLifecycle()
     val auditLogsState by viewModel.auditLogsState.collectAsStateWithLifecycle()
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
+    val liveVoiceState by viewModel.liveVoiceState.collectAsStateWithLifecycle()
     val isMutating by viewModel.isMutating.collectAsStateWithLifecycle()
     val onboardingExtraction by viewModel.onboardingExtraction.collectAsStateWithLifecycle()
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
@@ -606,11 +609,17 @@ private fun AuthenticatedAuroraShell(
                             composable<AiRoute> {
                                 AiAssistantScreen(
                                     aiState = aiState,
+                                    liveVoiceState = liveVoiceState,
                                     messages = chatMessages,
                                     onSelectEmployee = { viewModel.selectAiEmployee(it) },
+                                    onSelectTaskProfile = { viewModel.selectAiTaskProfile(it) },
                                     onSendMessage = { prompt, docText, bmp ->
                                         viewModel.sendAiMessage(prompt, docText, bmp)
-                                    }
+                                    },
+                                    onStartLiveVoice = { viewModel.startLiveVoiceConversation() },
+                                    onStopLiveVoice = { viewModel.stopLiveVoiceConversation() },
+                                    onSendLiveVoiceNudge = { viewModel.sendLiveVoiceNudge(it) },
+                                    onDismissLiveVoiceError = { viewModel.dismissLiveVoiceError() }
                                 )
                             }
 
@@ -619,7 +628,12 @@ private fun AuthenticatedAuroraShell(
                                     business = activeBusiness,
                                     calls = calls,
                                     voicemails = voicemails,
+                                    liveVoiceState = liveVoiceState,
                                     onToggleAiReceptionist = { viewModel.toggleAiReceptionist(it) },
+                                    onStartLiveReceptionistCall = {
+                                        viewModel.startLiveVoiceConversation(employeeIdOverride = "ai_receptionist")
+                                    },
+                                    onStopLiveReceptionistCall = { viewModel.stopLiveVoiceConversation() },
                                     onLogCall = { name, phone, dir, status, duration, summary ->
                                         viewModel.logCall(name, phone, dir, status, duration, summary)
                                     },

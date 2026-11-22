@@ -4,12 +4,15 @@ import android.graphics.Bitmap
 import android.util.Log
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.Content
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.rcsolutions.rcosmobile.model.ActionRecord
+import com.rcsolutions.rcosmobile.model.AiTaskProfile
 import com.rcsolutions.rcosmobile.model.BusinessAccount
 import com.rcsolutions.rcosmobile.model.CallRecord
+import com.rcsolutions.rcosmobile.model.ChatMessage
 import com.rcsolutions.rcosmobile.model.Customer
 import com.rcsolutions.rcosmobile.model.FieldTask
 import com.rcsolutions.rcosmobile.model.Job
@@ -23,14 +26,17 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
 private const val TAG = "AiRepository"
-private const val MODEL_PRIMARY = "gemini-3.8-flash"
-private const val MODEL_FAST = "gemini-3.5-flash-lite"
+const val MODEL_DEEP_REASONING = "gemini-4-carbon"
+const val MODEL_COMPLEX_INTERACTIVE = "gemini-4-neon"
+const val MODEL_GENERAL = "gemini-4-hydrogen"
+const val MODEL_FAST = "gemini-3.1-flash-lite"
+
+data class StreamReplyEvent(
+    val accumulatedText: String,
+    val modelUsed: String
+)
 
 class AiRepository {
-
-    private val chatModel by lazy {
-        Firebase.ai.generativeModel(modelName = MODEL_PRIMARY)
-    }
 
     private val onboardingModel by lazy {
         val schema = Schema.obj(
@@ -54,6 +60,9 @@ class AiRepository {
         )
         Firebase.ai.generativeModel(
             modelName = MODEL_FAST,
+            systemInstruction = content {
+                text("You extract structured service-business profiles accurately without inventing missing details.")
+            },
             generationConfig = generationConfig {
                 responseMimeType = "application/json"
                 responseSchema = schema
@@ -72,7 +81,10 @@ class AiRepository {
             )
         )
         Firebase.ai.generativeModel(
-            modelName = MODEL_PRIMARY,
+            modelName = MODEL_COMPLEX_INTERACTIVE,
+            systemInstruction = content {
+                text("You are an expert service-business estimator preparing itemized quotes ready for owner review.")
+            },
             generationConfig = generationConfig {
                 responseMimeType = "application/json"
                 responseSchema = schema
@@ -80,8 +92,31 @@ class AiRepository {
         )
     }
 
-    fun streamAssistantReply(
-        prompt: String,
+    private val fastFollowUpModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = MODEL_FAST,
+            systemInstruction = content {
+                text("You write concise, warm, ready-to-send customer follow-up messages for local service businesses.")
+            }
+        )
+    }
+
+    fun resolveModelName(
+        employeeId: String,
+        taskProfile: AiTaskProfile,
+        hasMultimodalOrDoc: Boolean
+    ): String {
+        taskProfile.modelId?.let { return it }
+        if (hasMultimodalOrDoc) return MODEL_COMPLEX_INTERACTIVE
+        return when (employeeId) {
+            "finance", "business_analyst", "systems_engineer", "project_manager" -> MODEL_DEEP_REASONING
+            "sales", "operations", "technician" -> MODEL_COMPLEX_INTERACTIVE
+            "ai_receptionist", "admin" -> MODEL_FAST
+            else -> MODEL_GENERAL
+        }
+    }
+
+    fun buildRoleSystemInstruction(
         business: BusinessAccount?,
         employeeId: String,
         customers: List<Customer>,
@@ -89,16 +124,21 @@ class AiRepository {
         tasks: List<FieldTask>,
         calls: List<CallRecord>,
         actions: List<ActionRecord>,
-        attachedDocumentText: String = "",
-        attachedBitmap: Bitmap? = null,
-    ): Flow<String> = flow {
+        isVoiceMode: Boolean = false
+    ): String {
         val employee = RcosDefaults.AI_EMPLOYEES.firstOrNull { it.id == employeeId }
             ?: RcosDefaults.AI_EMPLOYEES.first()
         val tone = business?.employeeTones?.get(employee.id) ?: employee.defaultTone
         val pendingApprovals = actions.count { it.status == "awaiting_approval" }
-        val contextSummary = buildString {
+        return buildString {
             appendLine(employee.systemPromptRole)
-            appendLine("Voice tone: $tone.")
+            appendLine("Active Role: ${employee.name} (${employee.department}). Escalates to: ${employee.escalatesTo}.")
+            appendLine("Voice & Communication Tone: $tone.")
+            if (isVoiceMode) {
+                appendLine("Speak naturally in short, clear conversational sentences suitable for real-time audio on a job site.")
+            } else {
+                appendLine("Respond clearly in plain, practical service-business language.")
+            }
             if (business != null) {
                 appendLine("Company: ${business.name} (Industry: ${RcosDefaults.findPreset(business.industry).name}).")
                 if (business.services.isNotEmpty()) {
@@ -110,7 +150,7 @@ class AiRepository {
                 if (business.businessKnowledge.isNotBlank()) {
                     appendLine("Owner Knowledge Base:\n${business.businessKnowledge.take(3000)}")
                 }
-                appendLine("Safety rule: Approval threshold is $${business.dollarThreshold.toInt()} (${business.autonomyMode} mode). Never execute external sends or money commitments without owner confirmation.")
+                appendLine("Safety & Approval Policy: Approval threshold is $${business.dollarThreshold.toInt()} (${business.autonomyMode} mode). Never execute external sends, quotes, or money commitments without owner confirmation.")
             }
             appendLine("Live Ops Snapshot: ${customers.size} customers, ${jobs.size} scheduled jobs, ${tasks.count { !it.completed }} open tasks, ${calls.size} calls logged, $pendingApprovals items awaiting approval.")
             if (customers.isNotEmpty()) {
@@ -119,31 +159,96 @@ class AiRepository {
             if (jobs.isNotEmpty()) {
                 appendLine("Upcoming jobs: ${jobs.take(6).joinToString("; ") { "${it.title} for ${it.clientName} on ${it.scheduledDate} at ${it.scheduledTime}" }}")
             }
+        }
+    }
+
+    fun streamAssistantReply(
+        prompt: String,
+        historyMessages: List<ChatMessage>,
+        taskProfile: AiTaskProfile,
+        business: BusinessAccount?,
+        employeeId: String,
+        customers: List<Customer>,
+        jobs: List<Job>,
+        tasks: List<FieldTask>,
+        calls: List<CallRecord>,
+        actions: List<ActionRecord>,
+        attachedDocumentText: String = "",
+        attachedBitmap: Bitmap? = null,
+    ): Flow<StreamReplyEvent> = flow {
+        val modelName = resolveModelName(
+            employeeId = employeeId,
+            taskProfile = taskProfile,
+            hasMultimodalOrDoc = attachedBitmap != null || attachedDocumentText.isNotBlank()
+        )
+        val systemPrompt = buildRoleSystemInstruction(
+            business = business,
+            employeeId = employeeId,
+            customers = customers,
+            jobs = jobs,
+            tasks = tasks,
+            calls = calls,
+            actions = actions,
+            isVoiceMode = false
+        )
+        val model = Firebase.ai.generativeModel(
+            modelName = modelName,
+            systemInstruction = content { text(systemPrompt) }
+        )
+        val geminiHistory = buildGeminiChatHistory(historyMessages)
+        val chat = model.startChat(history = geminiHistory)
+
+        val requestContent = content {
             if (attachedDocumentText.isNotBlank()) {
-                appendLine("Attached Document Reference:\n${attachedDocumentText.take(4000)}")
+                text("Attached Document Reference:\n${attachedDocumentText.take(4000)}")
             }
-            appendLine("\nRespond clearly in plain, practical service-business language.")
+            if (attachedBitmap != null) {
+                image(scaleBitmapUnderLimit(attachedBitmap))
+            }
+            text(prompt)
         }
 
         val accumulated = StringBuilder()
         withTimeout(60_000L) {
-            val requestContent = content {
-                text(contextSummary)
-                if (attachedBitmap != null) {
-                    image(scaleBitmapUnderLimit(attachedBitmap))
-                }
-                text("Owner request: $prompt")
-            }
-            chatModel.generateContentStream(requestContent).collect { chunk ->
+            chat.sendMessageStream(requestContent).collect { chunk ->
                 val chunkText = chunk.text.orEmpty()
                 if (chunkText.isNotEmpty()) {
                     accumulated.append(chunkText)
-                    emit(accumulated.toString())
+                    emit(StreamReplyEvent(accumulated.toString(), modelName))
                 }
             }
         }
         if (accumulated.isBlank()) {
             throw IllegalStateException("AI Assistant returned an empty response.")
+        }
+    }
+
+    private fun buildGeminiChatHistory(messages: List<ChatMessage>): List<Content> {
+        val recent = messages
+            .filter { it.text.isNotBlank() }
+            .takeLast(24)
+
+        val normalized = mutableListOf<Pair<String, StringBuilder>>()
+        for (msg in recent) {
+            val role = if (msg.role == "user") "user" else "model"
+            if (normalized.isEmpty() && role == "model") {
+                // Gemini chat history must start with a user turn.
+                continue
+            }
+            val last = normalized.lastOrNull()
+            if (last != null && last.first == role) {
+                last.second.append("\n").append(msg.text.trim())
+            } else {
+                normalized.add(role to StringBuilder(msg.text.trim()))
+            }
+        }
+        // If the trailing persisted turn is an unanswered user message, drop it so startChat ends on a model turn
+        // before chat.sendMessageStream sends the new user prompt.
+        if (normalized.lastOrNull()?.first == "user") {
+            normalized.removeAt(normalized.lastIndex)
+        }
+        return normalized.map { (role, textBuilder) ->
+            content(role) { text(textBuilder.toString()) }
         }
     }
 
@@ -246,7 +351,7 @@ class AiRepository {
         purpose: String = "friendly check-in and service availability"
     ): Result<String> = try {
         val response = withTimeout(60_000L) {
-            chatModel.generateContent(
+            fastFollowUpModel.generateContent(
                 buildString {
                     appendLine("Write a concise, ready-to-send customer follow-up message (SMS/Email length, 2-4 sentences).")
                     if (business != null) {

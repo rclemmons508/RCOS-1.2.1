@@ -677,3 +677,33 @@ data class QuoteDraftSuggestion(
     val totalAmount: Double = 0.0,
     val clientMessage: String = "",
 )
+
+enum class AiTaskProfile(
+    val id: String,
+    val shortLabel: String,
+    val modelId: String?,
+    val description: String
+) {
+    AUTO("auto", "Auto", null, "Routes automatically by assistant role & task"),
+    GENERAL("general", "Hydrogen", "gemini-4-hydrogen", "gemini-4-hydrogen • General assistant tasks"),
+    DEEP_REASONING("reasoning", "Carbon", "gemini-4-carbon", "gemini-4-carbon • Deep reasoning & analysis"),
+    COMPLEX_INTERACTIVE("interactive", "Neon", "gemini-4-neon", "gemini-4-neon • Complex interactive workflows"),
+    FAST("fast", "Lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite • Fast responses");
+}
+
+enum class LiveVoiceStatus {
+    IDLE,
+    CONNECTING,
+    LIVE,
+    ERROR
+}
+
+data class LiveVoiceUiState(
+    val status: LiveVoiceStatus = LiveVoiceStatus.IDLE,
+    val modelId: String = "gemini-3.8-live",
+    val activeRoleName: String = "Executive Assistant",
+    val durationSeconds: Int = 0,
+    val statusDetail: String = "Tap Voice to start a real-time Gemini Live conversation",
+    val error: String? = null
+)
+

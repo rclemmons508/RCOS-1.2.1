@@ -6,6 +6,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.rcsolutions.rcosmobile.data.AiRepository
+import com.rcsolutions.rcosmobile.data.LiveVoiceManager
+import com.rcsolutions.rcosmobile.data.MODEL_GEMINI_LIVE
+import com.rcsolutions.rcosmobile.data.MODEL_GENERAL
 import com.rcsolutions.rcosmobile.data.LocalPrefsState
 import com.rcsolutions.rcosmobile.data.RcosDefaults
 import com.rcsolutions.rcosmobile.data.RcosRepository
@@ -14,6 +17,7 @@ import com.rcsolutions.rcosmobile.data.WeatherService
 import com.rcsolutions.rcosmobile.model.ActionRecord
 import com.rcsolutions.rcosmobile.model.ActionStatus
 import com.rcsolutions.rcosmobile.model.AgentInboxMessage
+import com.rcsolutions.rcosmobile.model.AiTaskProfile
 import com.rcsolutions.rcosmobile.model.AuditLog
 import com.rcsolutions.rcosmobile.model.AutonomyMode
 import com.rcsolutions.rcosmobile.model.BusinessAccount
@@ -27,6 +31,8 @@ import com.rcsolutions.rcosmobile.model.FieldTask
 import com.rcsolutions.rcosmobile.model.Job
 import com.rcsolutions.rcosmobile.model.JobPriority
 import com.rcsolutions.rcosmobile.model.JobStatus
+import com.rcsolutions.rcosmobile.model.LiveVoiceStatus
+import com.rcsolutions.rcosmobile.model.LiveVoiceUiState
 import com.rcsolutions.rcosmobile.model.OnboardingExtraction
 import com.rcsolutions.rcosmobile.model.QuoteDraftSuggestion
 import com.rcsolutions.rcosmobile.model.TaskBucket
@@ -36,7 +42,11 @@ import com.rcsolutions.rcosmobile.model.UiState
 import com.rcsolutions.rcosmobile.model.VoicemailRecord
 import com.rcsolutions.rcosmobile.model.WeatherSnapshot
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -59,6 +69,8 @@ private const val STOP_TIMEOUT_MS = 5000L
 
 data class AiConsoleState(
     val selectedEmployeeId: String = "executive_assistant",
+    val selectedTaskProfile: AiTaskProfile = AiTaskProfile.AUTO,
+    val activeModelId: String = MODEL_GENERAL,
     val isStreaming: Boolean = false,
     val streamingText: String = "",
     val error: String? = null,
@@ -71,6 +83,7 @@ class MainViewModel(
     private val repository: RcosRepository,
     private val prefsRepo: UserPreferencesRepository,
     private val aiRepo: AiRepository,
+    private val liveVoiceManager: LiveVoiceManager,
     private val weatherService: WeatherService,
     val currentUserId: String,
     val currentUserEmail: String,
@@ -184,6 +197,11 @@ class MainViewModel(
 
     private val _aiState = MutableStateFlow(AiConsoleState())
     val aiState: StateFlow<AiConsoleState> = _aiState.asStateFlow()
+
+    private val _liveVoiceState = MutableStateFlow(LiveVoiceUiState())
+    val liveVoiceState: StateFlow<LiveVoiceUiState> = _liveVoiceState.asStateFlow()
+
+    private var liveTimerJob: kotlinx.coroutines.Job? = null
 
     private val _bannerMessage = MutableStateFlow<String?>(null)
     val bannerMessage: StateFlow<String?> = _bannerMessage.asStateFlow()
@@ -392,7 +410,27 @@ class MainViewModel(
 
     // ---- AI Assistant Chat ----
     fun selectAiEmployee(employeeId: String) {
-        _aiState.value = _aiState.value.copy(selectedEmployeeId = employeeId)
+        val nextModel = aiRepo.resolveModelName(
+            employeeId = employeeId,
+            taskProfile = _aiState.value.selectedTaskProfile,
+            hasMultimodalOrDoc = false
+        )
+        _aiState.value = _aiState.value.copy(
+            selectedEmployeeId = employeeId,
+            activeModelId = nextModel
+        )
+    }
+
+    fun selectAiTaskProfile(profile: AiTaskProfile) {
+        val nextModel = aiRepo.resolveModelName(
+            employeeId = _aiState.value.selectedEmployeeId,
+            taskProfile = profile,
+            hasMultimodalOrDoc = false
+        )
+        _aiState.value = _aiState.value.copy(
+            selectedTaskProfile = profile,
+            activeModelId = nextModel
+        )
     }
 
     fun sendAiMessage(
@@ -408,9 +446,23 @@ class MainViewModel(
         if (clean.isEmpty() && attachedBitmap == null) return
         val effectivePrompt = clean.ifEmpty { "Please analyze this job site photo and suggest next steps." }
         val employeeId = _aiState.value.selectedEmployeeId
+        val taskProfile = _aiState.value.selectedTaskProfile
+        val resolvedModel = aiRepo.resolveModelName(
+            employeeId = employeeId,
+            taskProfile = taskProfile,
+            hasMultimodalOrDoc = attachedBitmap != null || attachedDocumentText.isNotBlank()
+        )
+        val existingHistory = (chatMessagesState.value as? UiState.Success)?.data
+            .orEmpty()
+            .filter { it.employeeId == employeeId || it.employeeId.isBlank() }
 
         viewModelScope.launch {
-            _aiState.value = _aiState.value.copy(isStreaming = true, streamingText = "", error = null)
+            _aiState.value = _aiState.value.copy(
+                activeModelId = resolvedModel,
+                isStreaming = true,
+                streamingText = "",
+                error = null
+            )
             repository.saveChatMessage(
                 biz,
                 ChatMessage(
@@ -424,8 +476,11 @@ class MainViewModel(
             )
             try {
                 var finalReply = ""
+                var modelUsed = resolvedModel
                 aiRepo.streamAssistantReply(
                     prompt = effectivePrompt,
+                    historyMessages = existingHistory,
+                    taskProfile = taskProfile,
                     business = biz,
                     employeeId = employeeId,
                     customers = (customersState.value as? UiState.Success)?.data.orEmpty(),
@@ -435,9 +490,13 @@ class MainViewModel(
                     actions = (actionsState.value as? UiState.Success)?.data.orEmpty(),
                     attachedDocumentText = attachedDocumentText,
                     attachedBitmap = attachedBitmap
-                ).collect { partial ->
-                    finalReply = partial
-                    _aiState.value = _aiState.value.copy(streamingText = partial)
+                ).collect { event ->
+                    finalReply = event.accumulatedText
+                    modelUsed = event.modelUsed
+                    _aiState.value = _aiState.value.copy(
+                        activeModelId = modelUsed,
+                        streamingText = finalReply
+                    )
                 }
 
                 if (finalReply.isNotBlank()) {
@@ -450,7 +509,7 @@ class MainViewModel(
                             employeeId = employeeId,
                             role = "assistant",
                             text = finalReply,
-                            modelUsed = "gemini-3.8-flash"
+                            modelUsed = modelUsed
                         )
                     )
                 }
@@ -466,6 +525,113 @@ class MainViewModel(
                 )
             }
         }
+    }
+
+    // ---- Gemini Live Voice Conversations (gemini-3.8-live) ----
+    fun startLiveVoiceConversation(employeeIdOverride: String? = null) {
+        val employeeId = employeeIdOverride ?: _aiState.value.selectedEmployeeId
+        val employee = RcosDefaults.AI_EMPLOYEES.firstOrNull { it.id == employeeId }
+            ?: RcosDefaults.AI_EMPLOYEES.first()
+        val biz = activeBusiness.value
+        val systemPrompt = aiRepo.buildRoleSystemInstruction(
+            business = biz,
+            employeeId = employee.id,
+            customers = (customersState.value as? UiState.Success)?.data.orEmpty(),
+            jobs = (jobsState.value as? UiState.Success)?.data.orEmpty(),
+            tasks = (tasksState.value as? UiState.Success)?.data.orEmpty(),
+            calls = (callsState.value as? UiState.Success)?.data.orEmpty(),
+            actions = (actionsState.value as? UiState.Success)?.data.orEmpty(),
+            isVoiceMode = true
+        )
+
+        viewModelScope.launch {
+            liveTimerJob?.cancel()
+            _liveVoiceState.value = LiveVoiceUiState(
+                status = LiveVoiceStatus.CONNECTING,
+                modelId = MODEL_GEMINI_LIVE,
+                activeRoleName = employee.name,
+                durationSeconds = 0,
+                statusDetail = "Connecting to $MODEL_GEMINI_LIVE...",
+                error = null
+            )
+            liveVoiceManager.startConversation(systemInstructionText = systemPrompt)
+                .onSuccess {
+                    _liveVoiceState.value = LiveVoiceUiState(
+                        status = LiveVoiceStatus.LIVE,
+                        modelId = MODEL_GEMINI_LIVE,
+                        activeRoleName = employee.name,
+                        durationSeconds = 0,
+                        statusDetail = "Listening & speaking live • $MODEL_GEMINI_LIVE",
+                        error = null
+                    )
+                    liveTimerJob = viewModelScope.launch {
+                        while (true) {
+                            delay(1000L)
+                            _liveVoiceState.value = _liveVoiceState.value.copy(
+                                durationSeconds = _liveVoiceState.value.durationSeconds + 1
+                            )
+                        }
+                    }
+                }
+                .onFailure { e ->
+                    val msg = e.localizedMessage ?: "Could not start Gemini Live voice conversation."
+                    _liveVoiceState.value = LiveVoiceUiState(
+                        status = LiveVoiceStatus.ERROR,
+                        modelId = MODEL_GEMINI_LIVE,
+                        activeRoleName = employee.name,
+                        durationSeconds = 0,
+                        statusDetail = "Voice session unavailable",
+                        error = msg
+                    )
+                }
+        }
+    }
+
+    fun sendLiveVoiceNudge(prompt: String) {
+        if (prompt.isBlank()) return
+        viewModelScope.launch {
+            liveVoiceManager.sendTextNudge(prompt)
+                .onFailure { e ->
+                    _bannerMessage.value = e.localizedMessage ?: "Failed to send voice prompt."
+                }
+        }
+    }
+
+    fun stopLiveVoiceConversation(logSession: Boolean = true) {
+        val current = _liveVoiceState.value
+        val elapsedSec = current.durationSeconds
+        val wasLive = current.status == LiveVoiceStatus.LIVE || current.status == LiveVoiceStatus.CONNECTING
+        liveTimerJob?.cancel()
+        liveTimerJob = null
+        viewModelScope.launch {
+            liveVoiceManager.stopConversation()
+            _liveVoiceState.value = LiveVoiceUiState()
+            val biz = activeBusiness.value
+            if (logSession && wasLive && elapsedSec >= 2 && biz != null) {
+                val mins = elapsedSec / 60
+                val secs = elapsedSec % 60
+                val durationLabel = if (mins > 0) "${mins}m ${secs}s" else "${secs}s"
+                val timeLabel = SimpleDateFormat("h:mm a", Locale.US).format(Date())
+                repository.createCallRecord(
+                    biz,
+                    CallRecord(
+                        businessId = biz.id,
+                        callerName = "Live Voice (${current.activeRoleName})",
+                        callerNumber = MODEL_GEMINI_LIVE,
+                        direction = CallDirection.OUTBOUND.code,
+                        status = CallStatus.COMPLETED.code,
+                        durationLabel = durationLabel,
+                        timeLabel = timeLabel,
+                        summary = "Real-time Gemini Live voice session with ${current.activeRoleName}",
+                        answeredBy = "ai_receptionist"
+                    )
+                )
+            }
+        }
+    }
+
+    fun dismissLiveVoiceError() {
+        _liveVoiceState.value = LiveVoiceUiState()
     }
 
     // ---- Quotes / Invoices / Approvals ----
@@ -903,6 +1069,15 @@ class MainViewModel(
     }
 
     suspend fun clearPrefsBeforeSignOut() {
+        stopLiveVoiceConversation(logSession = false)
         prefsRepo.clearAllOnSignOut()
+    }
+
+    override fun onCleared() {
+        liveTimerJob?.cancel()
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            liveVoiceManager.stopConversation()
+        }
+        super.onCleared()
     }
 }
