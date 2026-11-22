@@ -700,7 +700,7 @@ enum class LiveVoiceStatus {
 
 data class LiveVoiceUiState(
     val status: LiveVoiceStatus = LiveVoiceStatus.IDLE,
-    val modelId: String = "gemini-3.8-live",
+    val modelId: String = "gemini-3.1-flash-live-preview",
     val activeRoleName: String = "Executive Assistant",
     val durationSeconds: Int = 0,
     val statusDetail: String = "Tap Voice to start a real-time Gemini Live conversation",

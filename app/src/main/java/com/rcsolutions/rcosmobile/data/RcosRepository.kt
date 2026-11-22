@@ -9,6 +9,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.snapshots
 import com.rcsolutions.rcosmobile.R
 import com.rcsolutions.rcosmobile.model.ActionRecord
@@ -25,6 +26,8 @@ import com.rcsolutions.rcosmobile.model.Job
 import com.rcsolutions.rcosmobile.model.TeamMessage
 import com.rcsolutions.rcosmobile.model.VoicemailRecord
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
@@ -742,6 +745,74 @@ class RcosRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    data class OperationalSnapshot(
+        val jobsCount: Int,
+        val auditLogsCount: Int,
+        val agentMessagesCount: Int,
+        val actionsCount: Int
+    )
+
+    suspend fun fetchOperationalSnapshot(businessId: String, uid: String): Result<OperationalSnapshot> {
+        val basePath = "businesses/$businessId"
+        return try {
+            val activeUid = requireUserId()
+            require(activeUid == uid && businessId.isNotBlank()) { "Authenticated workspace required." }
+            val bizRef = db.collection("businesses").document(businessId)
+            coroutineScope {
+                val jobsDeferred = async {
+                    bizRef.collection("jobs").whereArrayContains("memberUids", uid)
+                        .get(Source.DEFAULT).await()
+                }
+                val auditsDeferred = async {
+                    bizRef.collection("auditLogs").whereArrayContains("memberUids", uid)
+                        .get(Source.DEFAULT).await()
+                }
+                val alertsDeferred = async {
+                    bizRef.collection("agentMessages").whereArrayContains("memberUids", uid)
+                        .get(Source.DEFAULT).await()
+                }
+                val actionsDeferred = async {
+                    bizRef.collection("actions").whereArrayContains("memberUids", uid)
+                        .get(Source.DEFAULT).await()
+                }
+                Result.success(
+                    OperationalSnapshot(
+                        jobsCount = jobsDeferred.await().size(),
+                        auditLogsCount = auditsDeferred.await().size(),
+                        agentMessagesCount = alertsDeferred.await().size(),
+                        actionsCount = actionsDeferred.await().size()
+                    )
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, basePath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchWeeklyDispatchJobs(businessId: String, uid: String): Result<List<Job>> {
+        val path = "businesses/$businessId/jobs"
+        return try {
+            val activeUid = requireUserId()
+            require(activeUid == uid && businessId.isNotBlank()) { "Authenticated workspace required." }
+            val snapshot = db.collection("businesses").document(businessId)
+                .collection("jobs")
+                .whereArrayContains("memberUids", uid)
+                .get(Source.DEFAULT)
+                .await()
+            val jobs = snapshot.toObjects(Job::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                .sortedBy { "${it.scheduledDate} ${it.scheduledTime}" }
+            Result.success(jobs)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, path)
             Result.failure(e)
         }
     }

@@ -270,7 +270,7 @@ fun AiAssistantScreen(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = if (isLiveOrConnecting) "End Live" else "Live 3.8",
+                    text = if (isLiveOrConnecting) "End Live" else "Go Live",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (isLiveOrConnecting) AuroraRed else AuroraEmerald
                 )

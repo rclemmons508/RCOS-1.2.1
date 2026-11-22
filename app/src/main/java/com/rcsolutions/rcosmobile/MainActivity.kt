@@ -240,6 +240,13 @@ private fun AuthenticatedAuroraShell(
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
     val liveVoiceState by viewModel.liveVoiceState.collectAsStateWithLifecycle()
     val isMutating by viewModel.isMutating.collectAsStateWithLifecycle()
+    val isOperationalSyncing by viewModel.isOperationalSyncing.collectAsStateWithLifecycle()
+    val lastOperationalSyncLabel by viewModel.lastOperationalSyncLabel.collectAsStateWithLifecycle()
+    val operationalSyncError by viewModel.operationalSyncError.collectAsStateWithLifecycle()
+    val weeklyDispatchJobsState by viewModel.weeklyDispatchJobsState.collectAsStateWithLifecycle()
+    val isWeeklyTrendsRefreshing by viewModel.isWeeklyTrendsRefreshing.collectAsStateWithLifecycle()
+    val weeklyTrendsSyncLabel by viewModel.weeklyTrendsSyncLabel.collectAsStateWithLifecycle()
+    val weeklyTrendsError by viewModel.weeklyTrendsError.collectAsStateWithLifecycle()
     val onboardingExtraction by viewModel.onboardingExtraction.collectAsStateWithLifecycle()
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
 
@@ -591,6 +598,21 @@ private fun AuthenticatedAuroraShell(
                                     actions = actions,
                                     jobs = jobs,
                                     agentMessages = agentMessages,
+                                    jobsState = jobsState,
+                                    auditLogsState = auditLogsState,
+                                    agentMessagesState = agentMessagesState,
+                                    actionsState = actionsState,
+                                    isOperationalSyncing = isOperationalSyncing,
+                                    lastOperationalSyncLabel = lastOperationalSyncLabel,
+                                    operationalSyncError = operationalSyncError,
+                                    weeklyDispatchJobsState = weeklyDispatchJobsState,
+                                    isWeeklyTrendsRefreshing = isWeeklyTrendsRefreshing,
+                                    weeklyTrendsSyncLabel = weeklyTrendsSyncLabel,
+                                    weeklyTrendsError = weeklyTrendsError,
+                                    onRefreshOperationalFeeds = { viewModel.refreshOperationalFeeds() },
+                                    onRefreshWeeklyTrends = { viewModel.refreshWeeklyDispatchTrends() },
+                                    onUpdateJobStatus = { job, status -> viewModel.updateJobStatus(job, status) },
+                                    onDismissAgentMessage = { viewModel.dismissAgentMessage(it) },
                                     onOpenNotifications = { showNotificationsDialog = true },
                                     onUpdateFocusQuote = { viewModel.updateFocusQuote(it) },
                                     onUpdateWeatherCity = { viewModel.updateWeatherCity(it) },

@@ -3,9 +3,11 @@ package com.rcsolutions.rcosmobile.data
 import android.util.Log
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.GenerativeBackend
 import com.google.firebase.ai.type.LiveSession
 import com.google.firebase.ai.type.PublicPreviewAPI
 import com.google.firebase.ai.type.ResponseModality
+import com.google.firebase.ai.type.ServiceConnectionHandshakeFailedException
 import com.google.firebase.ai.type.SpeechConfig
 import com.google.firebase.ai.type.Voice
 import com.google.firebase.ai.type.content
@@ -15,7 +17,9 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
 private const val TAG = "LiveVoiceManager"
-const val MODEL_GEMINI_LIVE = "gemini-3.8-live"
+const val MODEL_GEMINI_LIVE = "gemini-3.1-flash-live-preview"
+const val MODEL_GEMINI_LIVE_FALLBACK = "gemini-2.5-flash-native-audio-preview-12-2025"
+const val MODEL_GEMINI_LIVE_LEGACY_FALLBACK = "gemini-2.5-flash-native-audio-preview-09-2025"
 
 @OptIn(PublicPreviewAPI::class)
 class LiveVoiceManager {
@@ -25,44 +29,93 @@ class LiveVoiceManager {
     val isConnected: Boolean
         get() = activeSession != null
 
+    private data class LiveAttemptConfig(
+        val modelName: String,
+        val voiceName: String?,
+        val includeSystemInstruction: Boolean
+    )
+
     suspend fun startConversation(
         systemInstructionText: String,
         voiceName: String = "Aoede"
-    ): Result<Unit> {
+    ): Result<String> {
         stopConversation()
-        return try {
-            val liveModel = Firebase.ai.liveModel(
-                modelName = MODEL_GEMINI_LIVE,
-                generationConfig = liveGenerationConfig {
-                    responseModality = ResponseModality.AUDIO
-                    speechConfig = SpeechConfig(voice = Voice(voiceName))
-                },
-                systemInstruction = content {
-                    text(systemInstructionText)
+        val attempts = listOf(
+            LiveAttemptConfig(MODEL_GEMINI_LIVE, voiceName, includeSystemInstruction = true),
+            LiveAttemptConfig(MODEL_GEMINI_LIVE_FALLBACK, voiceName, includeSystemInstruction = true),
+            LiveAttemptConfig(MODEL_GEMINI_LIVE_FALLBACK, voiceName = null, includeSystemInstruction = true),
+            LiveAttemptConfig(MODEL_GEMINI_LIVE_LEGACY_FALLBACK, voiceName = null, includeSystemInstruction = false)
+        )
+
+        var lastError: Throwable? = null
+        val backend = Firebase.ai(backend = GenerativeBackend.googleAI())
+
+        for (attempt in attempts) {
+            var pendingSession: LiveSession? = null
+            try {
+                val liveModel = backend.liveModel(
+                    modelName = attempt.modelName,
+                    generationConfig = liveGenerationConfig {
+                        responseModality = ResponseModality.AUDIO
+                        if (!attempt.voiceName.isNullOrBlank()) {
+                            speechConfig = SpeechConfig(voice = Voice(attempt.voiceName))
+                        }
+                    },
+                    systemInstruction = if (attempt.includeSystemInstruction && systemInstructionText.isNotBlank()) {
+                        content { text(systemInstructionText) }
+                    } else {
+                        null
+                    }
+                )
+                val session = withTimeout(20_000L) {
+                    liveModel.connect()
                 }
-            )
-            val session = withTimeout(30_000L) {
-                liveModel.connect()
+                pendingSession = session
+                session.startAudioConversation()
+                activeSession = session
+                Log.i(TAG, "Gemini Live session connected on model ${attempt.modelName}")
+                return Result.success(attempt.modelName)
+            } catch (e: CancellationException) {
+                if (e is TimeoutCancellationException) {
+                    Log.w(TAG, "Gemini Live handshake timed out on ${attempt.modelName}", e)
+                    cleanupSessionQuietly(pendingSession)
+                    lastError = e
+                } else {
+                    cleanupSessionQuietly(pendingSession)
+                    stopConversation()
+                    throw e
+                }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Microphone permission missing for Gemini Live", e)
+                cleanupSessionQuietly(pendingSession)
+                stopConversation()
+                return Result.failure(
+                    Exception("Microphone permission is required for real-time voice conversations.")
+                )
+            } catch (e: ServiceConnectionHandshakeFailedException) {
+                Log.w(TAG, "Gemini Live WebSocket handshake rejected on ${attempt.modelName}: ${e.message}", e)
+                cleanupSessionQuietly(pendingSession)
+                lastError = e
+            } catch (e: Exception) {
+                Log.w(TAG, "Gemini Live attempt failed on ${attempt.modelName}: ${e.message}", e)
+                cleanupSessionQuietly(pendingSession)
+                lastError = e
             }
-            activeSession = session
-            session.startAudioConversation()
-            Result.success(Unit)
-        } catch (e: TimeoutCancellationException) {
-            Log.e(TAG, "Gemini Live connection timed out", e)
-            stopConversation()
-            Result.failure(Exception("Voice connection timed out after 30 seconds. Please retry."))
-        } catch (e: CancellationException) {
-            stopConversation()
-            throw e
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Microphone permission missing for Gemini Live", e)
-            stopConversation()
-            Result.failure(Exception("Microphone permission is required for real-time voice conversations."))
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start Gemini Live voice session", e)
-            stopConversation()
-            Result.failure(e)
         }
+
+        stopConversation()
+        val finalException = lastError
+        Log.e(TAG, "Failed to start Gemini Live voice session across all models", finalException)
+        val userMessage = when (finalException) {
+            is TimeoutCancellationException ->
+                "Voice connection timed out. Check your signal and tap Voice to retry."
+            is ServiceConnectionHandshakeFailedException ->
+                "Could not establish the Gemini Live audio channel. Verify your internet connection and try again."
+            else ->
+                finalException?.localizedMessage?.takeIf { it.isNotBlank() }
+                    ?: "Gemini Live voice session could not connect. Please try again."
+        }
+        return Result.failure(Exception(userMessage, finalException))
     }
 
     suspend fun sendTextNudge(prompt: String): Result<Unit> {
@@ -83,6 +136,11 @@ class LiveVoiceManager {
     suspend fun stopConversation() {
         val session = activeSession ?: return
         activeSession = null
+        cleanupSessionQuietly(session)
+    }
+
+    private suspend fun cleanupSessionQuietly(session: LiveSession?) {
+        if (session == null) return
         runCatching { session.stopAudioConversation() }
             .onFailure { Log.w(TAG, "Error stopping audio conversation", it) }
         runCatching { session.close() }

@@ -85,4 +85,5 @@ dependencies {
 
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.vico.compose.m3)
 }

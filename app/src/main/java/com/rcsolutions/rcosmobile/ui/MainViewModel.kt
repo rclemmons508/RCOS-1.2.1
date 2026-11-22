@@ -115,12 +115,38 @@ class MainViewModel(
         .map { it?.id.orEmpty() }
         .distinctUntilChanged()
 
+    private val _weeklyFetchedJobs = MutableStateFlow<Pair<String, List<Job>>?>(null)
+
     val jobsState: StateFlow<UiState<List<Job>>> = activeBusinessIdFlow
         .flatMapLatest { bizId ->
+            _weeklyFetchedJobs.value = null
             if (bizId.isBlank()) flowOf(emptyList())
             else repository.observeJobs(bizId, currentUserId)
         }
         .toUiStateFlow("Failed to load scheduled jobs")
+
+    val weeklyDispatchJobsState: StateFlow<UiState<List<Job>>> =
+        combine(activeBusinessIdFlow, jobsState, _weeklyFetchedJobs) { bizId, liveState, fetchedPair ->
+            when (liveState) {
+                is UiState.Success -> {
+                    val liveList = liveState.data
+                    val fetched = fetchedPair?.takeIf { it.first == bizId }?.second
+                    if (fetched != null && fetched.size > liveList.size) {
+                        UiState.Success(fetched)
+                    } else {
+                        liveState
+                    }
+                }
+                is UiState.Loading -> {
+                    val fetched = fetchedPair?.takeIf { it.first == bizId }?.second
+                    if (fetched != null) UiState.Success(fetched) else UiState.Loading
+                }
+                is UiState.Error -> {
+                    val fetched = fetchedPair?.takeIf { it.first == bizId }?.second
+                    if (fetched != null) UiState.Success(fetched) else liveState
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
 
     val customersState: StateFlow<UiState<List<Customer>>> = activeBusinessIdFlow
         .flatMapLatest { bizId ->
@@ -209,6 +235,24 @@ class MainViewModel(
     private val _isMutating = MutableStateFlow(false)
     val isMutating: StateFlow<Boolean> = _isMutating.asStateFlow()
 
+    private val _isOperationalSyncing = MutableStateFlow(false)
+    val isOperationalSyncing: StateFlow<Boolean> = _isOperationalSyncing.asStateFlow()
+
+    private val _lastOperationalSyncLabel = MutableStateFlow<String?>(null)
+    val lastOperationalSyncLabel: StateFlow<String?> = _lastOperationalSyncLabel.asStateFlow()
+
+    private val _operationalSyncError = MutableStateFlow<String?>(null)
+    val operationalSyncError: StateFlow<String?> = _operationalSyncError.asStateFlow()
+
+    private val _isWeeklyTrendsRefreshing = MutableStateFlow(false)
+    val isWeeklyTrendsRefreshing: StateFlow<Boolean> = _isWeeklyTrendsRefreshing.asStateFlow()
+
+    private val _weeklyTrendsSyncLabel = MutableStateFlow<String?>(null)
+    val weeklyTrendsSyncLabel: StateFlow<String?> = _weeklyTrendsSyncLabel.asStateFlow()
+
+    private val _weeklyTrendsError = MutableStateFlow<String?>(null)
+    val weeklyTrendsError: StateFlow<String?> = _weeklyTrendsError.asStateFlow()
+
     private val _onboardingExtraction = MutableStateFlow<UiState<OnboardingExtraction>?>(null)
     val onboardingExtraction: StateFlow<UiState<OnboardingExtraction>?> = _onboardingExtraction.asStateFlow()
 
@@ -249,6 +293,43 @@ class MainViewModel(
     fun switchBusiness(businessId: String) {
         viewModelScope.launch {
             prefsRepo.setActiveBusinessId(businessId)
+        }
+    }
+
+    fun refreshOperationalFeeds() {
+        val biz = activeBusiness.value ?: return
+        if (_isOperationalSyncing.value) return
+        viewModelScope.launch {
+            _isOperationalSyncing.value = true
+            _operationalSyncError.value = null
+            repository.fetchOperationalSnapshot(biz.id, currentUserId)
+                .onSuccess {
+                    val timeStr = SimpleDateFormat("h:mm a", Locale.US).format(Date())
+                    _lastOperationalSyncLabel.value = "Synced $timeStr"
+                }
+                .onFailure { e ->
+                    _operationalSyncError.value = e.localizedMessage ?: "Could not sync Firestore events."
+                }
+            _isOperationalSyncing.value = false
+        }
+    }
+
+    fun refreshWeeklyDispatchTrends() {
+        val biz = activeBusiness.value ?: return
+        if (_isWeeklyTrendsRefreshing.value) return
+        viewModelScope.launch {
+            _isWeeklyTrendsRefreshing.value = true
+            _weeklyTrendsError.value = null
+            repository.fetchWeeklyDispatchJobs(biz.id, currentUserId)
+                .onSuccess { fetchedJobs ->
+                    _weeklyFetchedJobs.value = biz.id to fetchedJobs
+                    val timeStr = SimpleDateFormat("h:mm a", Locale.US).format(Date())
+                    _weeklyTrendsSyncLabel.value = "Synced $timeStr"
+                }
+                .onFailure { e ->
+                    _weeklyTrendsError.value = e.localizedMessage ?: "Failed to fetch weekly job dispatch trends."
+                }
+            _isWeeklyTrendsRefreshing.value = false
         }
     }
 
@@ -527,7 +608,7 @@ class MainViewModel(
         }
     }
 
-    // ---- Gemini Live Voice Conversations (gemini-3.8-live) ----
+    // ---- Gemini Live Voice Conversations ----
     fun startLiveVoiceConversation(employeeIdOverride: String? = null) {
         val employeeId = employeeIdOverride ?: _aiState.value.selectedEmployeeId
         val employee = RcosDefaults.AI_EMPLOYEES.firstOrNull { it.id == employeeId }
@@ -555,13 +636,13 @@ class MainViewModel(
                 error = null
             )
             liveVoiceManager.startConversation(systemInstructionText = systemPrompt)
-                .onSuccess {
+                .onSuccess { connectedModelId ->
                     _liveVoiceState.value = LiveVoiceUiState(
                         status = LiveVoiceStatus.LIVE,
-                        modelId = MODEL_GEMINI_LIVE,
+                        modelId = connectedModelId,
                         activeRoleName = employee.name,
                         durationSeconds = 0,
-                        statusDetail = "Listening & speaking live • $MODEL_GEMINI_LIVE",
+                        statusDetail = "Listening & speaking live • $connectedModelId",
                         error = null
                     )
                     liveTimerJob = viewModelScope.launch {
@@ -612,17 +693,18 @@ class MainViewModel(
                 val secs = elapsedSec % 60
                 val durationLabel = if (mins > 0) "${mins}m ${secs}s" else "${secs}s"
                 val timeLabel = SimpleDateFormat("h:mm a", Locale.US).format(Date())
+                val boundedCallerId = current.modelId.ifBlank { MODEL_GEMINI_LIVE }.take(30)
                 repository.createCallRecord(
                     biz,
                     CallRecord(
                         businessId = biz.id,
                         callerName = "Live Voice (${current.activeRoleName})",
-                        callerNumber = MODEL_GEMINI_LIVE,
+                        callerNumber = boundedCallerId,
                         direction = CallDirection.OUTBOUND.code,
                         status = CallStatus.COMPLETED.code,
                         durationLabel = durationLabel,
                         timeLabel = timeLabel,
-                        summary = "Real-time Gemini Live voice session with ${current.activeRoleName}",
+                        summary = "Real-time Gemini Live voice session (${current.modelId}) with ${current.activeRoleName}",
                         answeredBy = "ai_receptionist"
                     )
                 )

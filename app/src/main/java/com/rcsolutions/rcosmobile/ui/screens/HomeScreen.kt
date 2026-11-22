@@ -57,14 +57,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rcsolutions.rcosmobile.model.ActionRecord
 import com.rcsolutions.rcosmobile.model.AgentInboxMessage
+import com.rcsolutions.rcosmobile.model.AuditLog
 import com.rcsolutions.rcosmobile.model.BusinessAccount
 import com.rcsolutions.rcosmobile.model.CallRecord
 import com.rcsolutions.rcosmobile.model.Job
+import com.rcsolutions.rcosmobile.model.JobStatus
+import com.rcsolutions.rcosmobile.model.UiState
 import com.rcsolutions.rcosmobile.model.WeatherSnapshot
 import com.rcsolutions.rcosmobile.ui.components.AuroraCard
 import com.rcsolutions.rcosmobile.ui.components.AuroraEmptyState
 import com.rcsolutions.rcosmobile.ui.components.AuroraSectionHeader
 import com.rcsolutions.rcosmobile.ui.components.RcSolutionsBrandLockup
+import com.rcsolutions.rcosmobile.ui.components.SystemEventsDispatchSection
+import com.rcsolutions.rcosmobile.ui.components.WeeklyDispatchTrendsCard
 import com.rcsolutions.rcosmobile.ui.theme.AuroraAmber
 import com.rcsolutions.rcosmobile.ui.theme.AuroraBorder
 import com.rcsolutions.rcosmobile.ui.theme.AuroraCardElevated
@@ -96,6 +101,21 @@ fun HomeScreen(
     actions: List<ActionRecord>,
     jobs: List<Job>,
     agentMessages: List<AgentInboxMessage>,
+    jobsState: UiState<List<Job>>,
+    auditLogsState: UiState<List<AuditLog>>,
+    agentMessagesState: UiState<List<AgentInboxMessage>>,
+    actionsState: UiState<List<ActionRecord>>,
+    isOperationalSyncing: Boolean,
+    lastOperationalSyncLabel: String?,
+    operationalSyncError: String?,
+    weeklyDispatchJobsState: UiState<List<Job>>,
+    isWeeklyTrendsRefreshing: Boolean,
+    weeklyTrendsSyncLabel: String?,
+    weeklyTrendsError: String?,
+    onRefreshOperationalFeeds: () -> Unit,
+    onRefreshWeeklyTrends: () -> Unit,
+    onUpdateJobStatus: (Job, JobStatus) -> Unit,
+    onDismissAgentMessage: (String) -> Unit,
     onOpenNotifications: () -> Unit,
     onUpdateFocusQuote: (String) -> Unit,
     onUpdateWeatherCity: (String) -> Unit,
@@ -385,7 +405,38 @@ fun HomeScreen(
             }
         }
 
-        // 5. Recent Activity Feed
+        // 5. Weekly Job Dispatch Trends Chart (Vico + Firestore)
+        item {
+            WeeklyDispatchTrendsCard(
+                jobsState = weeklyDispatchJobsState,
+                isRefreshing = isWeeklyTrendsRefreshing,
+                syncLabel = weeklyTrendsSyncLabel,
+                syncError = weeklyTrendsError,
+                onRefreshFromFirestore = onRefreshWeeklyTrends,
+                onOpenSchedule = onNavigateSchedule
+            )
+        }
+
+        // 6. Live Firestore System Events & Job Dispatch Updates
+        item {
+            SystemEventsDispatchSection(
+                jobsState = jobsState,
+                auditLogsState = auditLogsState,
+                agentMessagesState = agentMessagesState,
+                actionsState = actionsState,
+                isSyncing = isOperationalSyncing,
+                lastSyncedLabel = lastOperationalSyncLabel,
+                syncError = operationalSyncError,
+                onRefresh = onRefreshOperationalFeeds,
+                onUpdateJobStatus = onUpdateJobStatus,
+                onDismissAgentMessage = onDismissAgentMessage,
+                onNavigateSchedule = onNavigateSchedule,
+                onNavigateApprovals = onNavigateApprovals,
+                onNavigateCalls = onNavigateCalls
+            )
+        }
+
+        // 7. Recent Activity Feed
         item {
             AuroraSectionHeader(
                 title = "Recent Activity",

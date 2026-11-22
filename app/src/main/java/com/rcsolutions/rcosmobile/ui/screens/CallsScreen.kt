@@ -274,9 +274,9 @@ fun CallsScreen(
                         Spacer(Modifier.width(8.dp))
                         Text(
                             text = when (liveVoiceState.status) {
-                                LiveVoiceStatus.CONNECTING -> "Connecting to Gemini 3.8 Live..."
+                                LiveVoiceStatus.CONNECTING -> "Connecting to Gemini Live (${liveVoiceState.modelId})..."
                                 LiveVoiceStatus.LIVE -> "End Live AI Voice (${liveVoiceState.durationSeconds}s)"
-                                else -> "Talk Live with AI Receptionist (gemini-3.8-live)"
+                                else -> "Talk Live with AI Receptionist"
                             },
                             style = MaterialTheme.typography.labelLarge,
                             color = if (isLive) AuroraRed else AuroraEmerald
