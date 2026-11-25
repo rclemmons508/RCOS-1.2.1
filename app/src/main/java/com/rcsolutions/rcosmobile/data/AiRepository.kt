@@ -26,10 +26,10 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
 private const val TAG = "AiRepository"
-const val MODEL_DEEP_REASONING = "gemini-4-carbon"
-const val MODEL_COMPLEX_INTERACTIVE = "gemini-4-neon"
-const val MODEL_GENERAL = "gemini-4-hydrogen"
-const val MODEL_FAST = "gemini-3.1-flash-lite"
+const val MODEL_DEEP_REASONING = "gemini-3.8-flash"
+const val MODEL_COMPLEX_INTERACTIVE = "gemini-3.8-flash"
+const val MODEL_GENERAL = "gemini-3.8-flash"
+const val MODEL_FAST = "gemini-3.5-flash-lite"
 
 data class StreamReplyEvent(
     val accumulatedText: String,

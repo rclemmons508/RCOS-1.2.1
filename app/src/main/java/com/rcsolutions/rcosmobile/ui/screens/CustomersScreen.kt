@@ -251,7 +251,7 @@ fun CustomersScreen(
                             }
                             IconButton(
                                 onClick = {
-                                    val msgBody = aiDraftPreview ?: "Hi ${cust.name}, checking in from RC Solutions!"
+                                    val msgBody = aiDraftPreview ?: "Hi ${cust.name}, following up on your service."
                                     val smsIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${cust.phone}")).apply {
                                         putExtra("sms_body", msgBody)
                                     }

@@ -17,9 +17,8 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
 private const val TAG = "LiveVoiceManager"
-const val MODEL_GEMINI_LIVE = "gemini-3.1-flash-live-preview"
-const val MODEL_GEMINI_LIVE_FALLBACK = "gemini-2.5-flash-native-audio-preview-12-2025"
-const val MODEL_GEMINI_LIVE_LEGACY_FALLBACK = "gemini-2.5-flash-native-audio-preview-09-2025"
+const val MODEL_GEMINI_LIVE = "gemini-3.8-live"
+const val MODEL_GEMINI_LIVE_FALLBACK = "gemini-3.1-flash-live-preview"
 
 @OptIn(PublicPreviewAPI::class)
 class LiveVoiceManager {
@@ -42,9 +41,9 @@ class LiveVoiceManager {
         stopConversation()
         val attempts = listOf(
             LiveAttemptConfig(MODEL_GEMINI_LIVE, voiceName, includeSystemInstruction = true),
-            LiveAttemptConfig(MODEL_GEMINI_LIVE_FALLBACK, voiceName, includeSystemInstruction = true),
-            LiveAttemptConfig(MODEL_GEMINI_LIVE_FALLBACK, voiceName = null, includeSystemInstruction = true),
-            LiveAttemptConfig(MODEL_GEMINI_LIVE_LEGACY_FALLBACK, voiceName = null, includeSystemInstruction = false)
+            LiveAttemptConfig(MODEL_GEMINI_LIVE, voiceName = null, includeSystemInstruction = true),
+            LiveAttemptConfig(MODEL_GEMINI_LIVE, voiceName = null, includeSystemInstruction = false),
+            LiveAttemptConfig(MODEL_GEMINI_LIVE_FALLBACK, voiceName = null, includeSystemInstruction = true)
         )
 
         var lastError: Throwable? = null

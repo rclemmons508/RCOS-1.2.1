@@ -315,7 +315,7 @@ fun AiAssistantScreen(
             }
         }
 
-        // Model Routing Profile Strip (Auto, Hydrogen, Carbon, Neon, Lite)
+        // Model Routing Profile Strip (Auto, 3.8 Flash, Reasoning, Multimodal, Lite)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -360,7 +360,7 @@ fun AiAssistantScreen(
             }
         }
 
-        // Real-Time Gemini Live Voice Session Card (gemini-3.8-live)
+        // Real-Time Gemini Live Voice Session Card
         if (liveVoiceState.status != LiveVoiceStatus.IDLE) {
             Spacer(Modifier.height(6.dp))
             LiveVoiceSessionBanner(

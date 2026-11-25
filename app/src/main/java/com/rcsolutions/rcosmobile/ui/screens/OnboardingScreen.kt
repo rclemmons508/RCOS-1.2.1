@@ -104,9 +104,9 @@ fun OnboardingScreen(
     var docOrDescription by remember { mutableStateOf("") }
     var attachedBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    var businessName by remember { mutableStateOf("RC Solutions") }
-    var selectedIndustryId by remember { mutableStateOf("pressure_washing") }
-    var servicesText by remember { mutableStateOf(RcosDefaults.findPreset("pressure_washing").defaultServices.joinToString(", ")) }
+    var businessName by remember { mutableStateOf("") }
+    var selectedIndustryId by remember { mutableStateOf("general_small_business") }
+    var servicesText by remember { mutableStateOf(RcosDefaults.findPreset("general_small_business").defaultServices.joinToString(", ")) }
     var serviceArea by remember { mutableStateOf("") }
     var businessHours by remember { mutableStateOf("Mon–Sat 7:00 AM – 6:00 PM") }
     var pricingApproach by remember { mutableStateOf("Written quote upfront with clear scope") }

@@ -3,15 +3,11 @@ package com.rcsolutions.rcosmobile.data
 import android.app.Activity
 import android.content.Context
 import android.util.Log
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
-import androidx.core.content.ContextCompat
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
-import androidx.fragment.app.FragmentActivity
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -145,47 +141,4 @@ fun signOut(
             }
         }
     }
-}
-
-fun canAuthenticateBiometric(context: Context): Boolean {
-    val manager = BiometricManager.from(context)
-    val result = manager.canAuthenticate(
-        BiometricManager.Authenticators.BIOMETRIC_STRONG or
-            BiometricManager.Authenticators.DEVICE_CREDENTIAL
-    )
-    return result == BiometricManager.BIOMETRIC_SUCCESS
-}
-
-fun showBiometricPrompt(
-    activity: FragmentActivity,
-    title: String = "Unlock RC Solutions",
-    subtitle: String = "Verify your identity to access workspace data",
-    onSuccess: () -> Unit,
-    onError: (String) -> Unit
-) {
-    val executor = ContextCompat.getMainExecutor(activity)
-    val prompt = BiometricPrompt(
-        activity,
-        executor,
-        object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                super.onAuthenticationSucceeded(result)
-                onSuccess()
-            }
-
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                super.onAuthenticationError(errorCode, errString)
-                onError(errString.toString())
-            }
-        }
-    )
-    val info = BiometricPrompt.PromptInfo.Builder()
-        .setTitle(title)
-        .setSubtitle(subtitle)
-        .setAllowedAuthenticators(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        )
-        .build()
-    prompt.authenticate(info)
 }

@@ -1,7 +1,7 @@
 {
   "firestore": [
     {
-      "database": "ai-studio-android-rcosmobi-13cf5d42-4222-47a0-9016-9bd9e76cf88a",
+      "database": "ai-studio-rcosmobileapp-c0c46f2b-8d0f-43b8-978d-70fb08614967",
       "rules": "firestore.rules"
     }
   ],

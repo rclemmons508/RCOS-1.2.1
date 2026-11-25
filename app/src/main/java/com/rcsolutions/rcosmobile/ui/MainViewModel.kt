@@ -405,21 +405,6 @@ class MainViewModel(
                 .onSuccess { newId ->
                     prefsRepo.setActiveBusinessId(newId)
                     if (serviceArea.isNotBlank()) prefsRepo.setWeatherCity(serviceArea)
-                    // Seed a welcoming proactive briefing from Executive Assistant in Firestore
-                    val createdBiz = biz.copy(id = newId)
-                    repository.saveAgentMessage(
-                        createdBiz,
-                        AgentInboxMessage(
-                            businessId = newId,
-                            agentId = "executive_assistant",
-                            kind = "suggestion",
-                            title = "${cleanName} workspace ready",
-                            body = "Your ${preset.name} team is configured with ${biz.services.size} services and an approval threshold of $${dollarThreshold.toInt()}. Start by adding a customer, creating a quote, or chatting with AI.",
-                            status = "unread",
-                            actionLabel = "Open AI",
-                            actionRoute = "ai"
-                        )
-                    )
                     _bannerMessage.value = "$cleanName workspace created."
                     onCreated()
                 }
@@ -1121,13 +1106,6 @@ class MainViewModel(
     fun updateWeatherCity(city: String) {
         viewModelScope.launch {
             prefsRepo.setWeatherCity(city)
-        }
-    }
-
-    fun setBiometricsEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            prefsRepo.setBiometricsEnabled(enabled)
-            _bannerMessage.value = if (enabled) "Biometric lock enabled." else "Biometric lock disabled."
         }
     }
 

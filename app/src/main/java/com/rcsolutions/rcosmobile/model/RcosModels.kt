@@ -166,7 +166,7 @@ data class BusinessAccount(
             put("ownerId", uid)
             put("memberUids", memberUids.ifEmpty { listOf(uid) }.distinct().take(25))
             put("memberEmails", emailMap.ifEmpty { memberEmails })
-            put("name", name.trim().take(100).ifEmpty { "RC Solutions" })
+            put("name", name.trim().take(100).ifEmpty { "My Business" })
             put("industry", industry.trim().take(60).ifEmpty { "general_small_business" })
             put("size", this@BusinessAccount.size.trim().take(50).ifEmpty { null })
             put("services", services.take(40))
@@ -685,10 +685,10 @@ enum class AiTaskProfile(
     val description: String
 ) {
     AUTO("auto", "Auto", null, "Routes automatically by assistant role & task"),
-    GENERAL("general", "Hydrogen", "gemini-4-hydrogen", "gemini-4-hydrogen • General assistant tasks"),
-    DEEP_REASONING("reasoning", "Carbon", "gemini-4-carbon", "gemini-4-carbon • Deep reasoning & analysis"),
-    COMPLEX_INTERACTIVE("interactive", "Neon", "gemini-4-neon", "gemini-4-neon • Complex interactive workflows"),
-    FAST("fast", "Lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite • Fast responses");
+    GENERAL("general", "3.8 Flash", "gemini-3.8-flash", "gemini-3.8-flash • General assistant tasks"),
+    DEEP_REASONING("reasoning", "Reasoning", "gemini-3.8-flash", "gemini-3.8-flash • Deep reasoning & analysis"),
+    COMPLEX_INTERACTIVE("interactive", "Multimodal", "gemini-3.8-flash", "gemini-3.8-flash • Docs, photos & interactive workflows"),
+    FAST("fast", "Lite", "gemini-3.5-flash-lite", "gemini-3.5-flash-lite • Fast lightweight responses");
 }
 
 enum class LiveVoiceStatus {
@@ -700,7 +700,7 @@ enum class LiveVoiceStatus {
 
 data class LiveVoiceUiState(
     val status: LiveVoiceStatus = LiveVoiceStatus.IDLE,
-    val modelId: String = "gemini-3.1-flash-live-preview",
+    val modelId: String = "gemini-3.8-live",
     val activeRoleName: String = "Executive Assistant",
     val durationSeconds: Int = 0,
     val statusDetail: String = "Tap Voice to start a real-time Gemini Live conversation",

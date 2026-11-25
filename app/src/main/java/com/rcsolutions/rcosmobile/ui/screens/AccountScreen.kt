@@ -50,14 +50,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.rcsolutions.rcosmobile.data.LocalPrefsState
 import com.rcsolutions.rcosmobile.data.RcosDefaults
-import com.rcsolutions.rcosmobile.data.canAuthenticateBiometric
 import com.rcsolutions.rcosmobile.model.ActionRecord
 import com.rcsolutions.rcosmobile.model.AuditLog
 import com.rcsolutions.rcosmobile.model.AutonomyMode
@@ -104,12 +102,10 @@ fun AccountScreen(
     onToggleAutomationRule: (String, Boolean) -> Unit,
     onSaveNotificationPrefs: (Boolean, Boolean, Boolean, Boolean) -> Unit,
     onSendTeamMessage: (String) -> Unit,
-    onSetBiometrics: (Boolean) -> Unit,
     onDeleteWorkspace: () -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     var activeModal by remember { mutableStateOf(AccountModal.NONE) }
     var confirmDelete by remember { mutableStateOf(false) }
 
@@ -165,7 +161,7 @@ fun AccountScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Owner • ${business?.name ?: "RC Solutions"}",
+                            text = "Owner • ${business?.name ?: "No Workspace"}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = AuroraTextSecondary,
                             maxLines = 1,
@@ -221,7 +217,7 @@ fun AccountScreen(
                 AccountMenuRow(
                     icon = Icons.Outlined.Shield,
                     title = "Security",
-                    subtitle = if (localPrefs.biometricsEnabled) "Biometric lock active" else "Standard Google Auth",
+                    subtitle = "Google Sign-In & Workspace Isolation",
                     testTag = "account_security",
                     onClick = { activeModal = AccountModal.SECURITY }
                 )
@@ -468,18 +464,16 @@ fun AccountScreen(
         }
 
         AccountModal.SECURITY -> {
-            val bioSupported = remember { canAuthenticateBiometric(context) }
             AlertDialog(
                 onDismissRequest = { activeModal = AccountModal.NONE },
                 containerColor = AuroraCardElevated,
                 title = { Text("Security & Privacy", color = AuroraTextPrimary) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        SettingSwitchRow(
-                            label = if (bioSupported) "Biometric App Lock" else "Biometric Lock (Device unsupported)",
-                            checked = localPrefs.biometricsEnabled,
-                            enabled = bioSupported,
-                            onCheckedChange = onSetBiometrics
+                        Text(
+                            text = "Authenticated via Google Sign-In. Workspace data is scoped strictly to your business account.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraTextSecondary
                         )
                         AuroraDivider()
                         Button(

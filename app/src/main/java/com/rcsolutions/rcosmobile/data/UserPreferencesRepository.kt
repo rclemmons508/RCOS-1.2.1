@@ -12,7 +12,6 @@ private val Context.dataStore by preferencesDataStore(name = "rcos_preferences")
 
 data class LocalPrefsState(
     val activeBusinessId: String = "",
-    val biometricsEnabled: Boolean = false,
     val focusQuote: String = RcosDefaults.FOCUS_QUOTES.first(),
     val weatherCity: String = "",
     val pushAlertsEnabled: Boolean = true,
@@ -29,7 +28,6 @@ class UserPreferencesRepository(context: Context) {
 
     private object Keys {
         val ACTIVE_BUSINESS_ID = stringPreferencesKey("active_business_id")
-        val BIOMETRICS_ENABLED = booleanPreferencesKey("biometrics_enabled")
         val FOCUS_QUOTE = stringPreferencesKey("focus_quote")
         val WEATHER_CITY = stringPreferencesKey("weather_city")
         val PUSH_ALERTS_ENABLED = booleanPreferencesKey("push_alerts_enabled")
@@ -45,7 +43,6 @@ class UserPreferencesRepository(context: Context) {
         val rawDisabled = prefs[Keys.DISABLED_RULES].orEmpty()
         LocalPrefsState(
             activeBusinessId = prefs[Keys.ACTIVE_BUSINESS_ID].orEmpty(),
-            biometricsEnabled = prefs[Keys.BIOMETRICS_ENABLED] ?: false,
             focusQuote = prefs[Keys.FOCUS_QUOTE] ?: RcosDefaults.FOCUS_QUOTES.first(),
             weatherCity = prefs[Keys.WEATHER_CITY].orEmpty(),
             pushAlertsEnabled = prefs[Keys.PUSH_ALERTS_ENABLED] ?: true,
@@ -60,10 +57,6 @@ class UserPreferencesRepository(context: Context) {
 
     suspend fun setActiveBusinessId(id: String) {
         store.edit { it[Keys.ACTIVE_BUSINESS_ID] = id }
-    }
-
-    suspend fun setBiometricsEnabled(enabled: Boolean) {
-        store.edit { it[Keys.BIOMETRICS_ENABLED] = enabled }
     }
 
     suspend fun setFocusQuote(quote: String) {
@@ -108,7 +101,6 @@ class UserPreferencesRepository(context: Context) {
     suspend fun clearAllOnSignOut() {
         store.edit {
             it.remove(Keys.ACTIVE_BUSINESS_ID)
-            it.remove(Keys.BIOMETRICS_ENABLED)
         }
     }
 }

@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Call
-import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.TaskAlt
@@ -81,8 +80,6 @@ import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
 import com.rcsolutions.rcosmobile.data.WeatherService
 import com.rcsolutions.rcosmobile.data.attemptAutoSignIn
 import com.rcsolutions.rcosmobile.data.authStateFlow
-import com.rcsolutions.rcosmobile.data.canAuthenticateBiometric
-import com.rcsolutions.rcosmobile.data.showBiometricPrompt
 import com.rcsolutions.rcosmobile.data.signOut
 import com.rcsolutions.rcosmobile.model.ActionStatus
 import com.rcsolutions.rcosmobile.model.Job
@@ -220,9 +217,6 @@ private fun AuthenticatedAuroraShell(
     viewModel: MainViewModel,
     onSignOutRequested: () -> Unit
 ) {
-    val context = LocalContext.current
-    val activity = context as? FragmentActivity
-
     val localPrefs by viewModel.localPrefs.collectAsStateWithLifecycle()
     val businessesState by viewModel.businessesState.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
@@ -261,88 +255,6 @@ private fun AuthenticatedAuroraShell(
     val teamMessages = (teamMessagesState as? UiState.Success)?.data.orEmpty()
     val agentMessages = (agentMessagesState as? UiState.Success)?.data.orEmpty()
     val auditLogs = (auditLogsState as? UiState.Success)?.data.orEmpty()
-
-    var biometricUnlocked by remember { mutableStateOf(false) }
-    var biometricPromptError by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(localPrefs.biometricsEnabled, biometricUnlocked) {
-        if (localPrefs.biometricsEnabled && !biometricUnlocked && activity != null && canAuthenticateBiometric(activity)) {
-            showBiometricPrompt(
-                activity = activity,
-                onSuccess = {
-                    biometricUnlocked = true
-                    biometricPromptError = null
-                },
-                onError = { err ->
-                    biometricPromptError = err
-                }
-            )
-        }
-    }
-
-    if (localPrefs.biometricsEnabled && !biometricUnlocked && activity != null && canAuthenticateBiometric(activity)) {
-        AuroraBackground {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                AuroraCard(
-                    highlighted = true,
-                    modifier = Modifier.widthIn(max = 420.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        RcSolutionsBrandLockup()
-                        Spacer(Modifier.height(18.dp))
-                        Icon(
-                            imageVector = Icons.Outlined.Fingerprint,
-                            contentDescription = "Biometric unlock",
-                            tint = AuroraEmerald,
-                            modifier = Modifier.size(56.dp)
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = "Workspace Locked",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = AuroraTextPrimary
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = biometricPromptError ?: "Verify your identity to access RC Solutions.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AuroraTextSecondary
-                        )
-                        Spacer(Modifier.height(18.dp))
-                        AuroraPrimaryCta(
-                            text = "Unlock with Biometrics",
-                            testTag = "biometric_unlock_button",
-                            onClick = {
-                                showBiometricPrompt(
-                                    activity = activity,
-                                    onSuccess = {
-                                        biometricUnlocked = true
-                                        biometricPromptError = null
-                                    },
-                                    onError = { err -> biometricPromptError = err }
-                                )
-                            }
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        AuroraSecondaryCta(
-                            text = "Sign Out",
-                            testTag = "biometric_sign_out_button",
-                            onClick = onSignOutRequested
-                        )
-                    }
-                }
-            }
-        }
-        return
-    }
 
     var showNewWorkspaceOnboarding by remember { mutableStateOf(false) }
     var dismissedEmptyOnboarding by remember { mutableStateOf(false) }
@@ -759,7 +671,6 @@ private fun AuthenticatedAuroraShell(
                                         viewModel.updateNotificationPrefs(push, sound, vib, quiet)
                                     },
                                     onSendTeamMessage = { viewModel.sendTeamMessage(it) },
-                                    onSetBiometrics = { viewModel.setBiometricsEnabled(it) },
                                     onDeleteWorkspace = {
                                         viewModel.deleteActiveWorkspace {
                                             navigateTopTab(HomeRoute)
