@@ -119,3 +119,13 @@ FIRESTORE_EMULATOR_HOST="127.0.0.1:8085" node --test firestore.test.js
 3. From a document with a client name, tap Job → Morgan drafts a job in chat; tap Client → two-tap confirm → the customer appears in Customers.
 4. Tap Go Live → the session starts on the earpiece (not the speakerphone) → hold a 30-second conversation → tap the Speakerphone toggle to confirm it flips → tap End.
 
+
+## Hotfix — accept ISO-string timestamps on live business docs
+
+- **The bug:** after the Firestore rules publish fixed `PERMISSION_DENIED`, workspace sync failed with "Could not deserialize object. Failed to convert value of type java.lang.String to Timestamp (found in field 'createdAt')". The live business doc (`biz_1794932142514`, written by the old React app) stores `createdAt`/`updatedAt` as ISO-8601 strings (e.g. `"2026-11-17T16:15:42.517Z"`), while the 1.2.1 models declare them as `@ServerTimestamp Timestamp?` — Firestore's mapper throws on String → Timestamp.
+- **The fix (reads only, no live-data writes):** new `data/FirestoreMapping.kt` — `DocumentSnapshot.toModel` / `QuerySnapshot.toModels` deserialize exactly like `toObject(..., ESTIMATE)` (via `CustomClassMapper`, the same mapper `toObject` uses internally) but first rewrite `createdAt`/`updatedAt` string values to real `Timestamp`s (hand-rolled ISO-8601 parser — `java.time` is not used because minSdk is 24 and the build has no core-library desugaring, so `Instant.parse` would crash on API 24/25; an unparseable value becomes `null` instead of crashing the sync). `RcosRepository` routes all three deserialization sites through it (generic list loader, `getUserProfile`, weekly dispatch jobs). These are the only `Timestamp`-typed fields any model declares, so the two keys cover every model class; `BusinessMember` has no timestamp field, so `members[].joinedAt` (a string on live docs) is still ignored as before.
+- **Writes unchanged:** creates/updates still send `FieldValue.serverTimestamp()` — the published rules require real timestamps on create.
+
+### Phone test (hotfix, after merge + install of the main APK)
+1. Sign in → the workspace loads RC Solutions (no more deserialize error) → Jobs and Customers show honest empty states.
+2. Sign out and back in → the workspace still loads (the string timestamps parse the same way every time).
