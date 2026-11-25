@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.rcsolutions.rcosmobile.data.AiRepository
 import com.rcsolutions.rcosmobile.data.ApiResult
+import com.rcsolutions.rcosmobile.data.AssistantDocument
 import com.rcsolutions.rcosmobile.data.ChatReply
 import com.rcsolutions.rcosmobile.data.ConnectionState
 import com.rcsolutions.rcosmobile.data.ConnectivityMonitor
@@ -15,9 +16,9 @@ import com.rcsolutions.rcosmobile.data.GmailConnection
 import com.rcsolutions.rcosmobile.data.GmailOAuthStart
 import com.rcsolutions.rcosmobile.data.ServerApiClient
 import com.rcsolutions.rcosmobile.data.ServerStatus
-import com.rcsolutions.rcosmobile.data.LiveVoiceManager
-import com.rcsolutions.rcosmobile.data.MODEL_GEMINI_LIVE
+import com.rcsolutions.rcosmobile.data.LiveKitVoiceManager
 import com.rcsolutions.rcosmobile.data.MODEL_GENERAL
+import com.rcsolutions.rcosmobile.data.MODEL_LIVEKIT_VOICE
 import com.rcsolutions.rcosmobile.data.LocalPrefsState
 import com.rcsolutions.rcosmobile.data.RcosDefaults
 import com.rcsolutions.rcosmobile.data.RcosRepository
@@ -36,6 +37,7 @@ import com.rcsolutions.rcosmobile.model.CallStatus
 import com.rcsolutions.rcosmobile.model.ChatMessage
 import com.rcsolutions.rcosmobile.model.Customer
 import com.rcsolutions.rcosmobile.model.CustomerRequest
+import com.rcsolutions.rcosmobile.model.CustomerStatus
 import com.rcsolutions.rcosmobile.model.FieldTask
 import com.rcsolutions.rcosmobile.model.Invoice
 import com.rcsolutions.rcosmobile.model.Job
@@ -95,7 +97,7 @@ class MainViewModel(
     private val repository: RcosRepository,
     private val prefsRepo: UserPreferencesRepository,
     private val aiRepo: AiRepository,
-    private val liveVoiceManager: LiveVoiceManager,
+    private val liveKitVoiceManager: LiveKitVoiceManager,
     private val weatherService: WeatherService,
     private val serverApi: ServerApiClient = ServerApiClient(),
     private val connectivityMonitor: ConnectivityMonitor? = null,
@@ -284,6 +286,27 @@ class MainViewModel(
     private val _liveVoiceState = MutableStateFlow(LiveVoiceUiState())
     val liveVoiceState: StateFlow<LiveVoiceUiState> = _liveVoiceState.asStateFlow()
 
+    /** True while the live voice session is on the speakerphone. The
+     * session always starts on the earpiece (see LiveKitVoiceManager);
+     * this only flips after the user taps the toggle. */
+    private val _isSpeakerphone = MutableStateFlow(false)
+    val isSpeakerphone: StateFlow<Boolean> = _isSpeakerphone.asStateFlow()
+
+    /** Server-side assistant documents for this business
+     * (POST/GET/DELETE /api/assistant/documents). Uploaded from the
+     * Assistant page; attached ones ground the next /api/chat call. */
+    private val _documents = MutableStateFlow<List<AssistantDocument>>(emptyList())
+    val documents: StateFlow<List<AssistantDocument>> = _documents.asStateFlow()
+
+    private val _attachedDocumentIds = MutableStateFlow<Set<String>>(emptySet())
+    val attachedDocumentIds: StateFlow<Set<String>> = _attachedDocumentIds.asStateFlow()
+
+    private val _isUploadingDocument = MutableStateFlow(false)
+    val isUploadingDocument: StateFlow<Boolean> = _isUploadingDocument.asStateFlow()
+
+    private val _documentError = MutableStateFlow<String?>(null)
+    val documentError: StateFlow<String?> = _documentError.asStateFlow()
+
     private var liveTimerJob: kotlinx.coroutines.Job? = null
 
     private val _bannerMessage = MutableStateFlow<String?>(null)
@@ -420,6 +443,7 @@ class MainViewModel(
         messages: List<ChatMessage>,
         roleId: String = "executive_assistant",
         modelTier: String = "general",
+        documentIds: List<String> = emptyList(),
     ) {
         val biz = activeBusiness.value ?: run {
             _serverChatState.value = UiState.Error("Complete workspace setup first to chat with the server.")
@@ -431,7 +455,7 @@ class MainViewModel(
         }
         viewModelScope.launch {
             _serverChatState.value = UiState.Loading
-            _serverChatState.value = when (val result = serverApi.postChat(messages, roleId, modelTier, biz.id)) {
+            _serverChatState.value = when (val result = serverApi.postChat(messages, roleId, modelTier, biz.id, documentIds)) {
                 is ApiResult.Success -> {
                     if (result.data.isFallback) {
                         Log.w(TAG, "Server chat answered with its offline fallback (modelUsed=rcos-offline-engine).")
@@ -854,6 +878,15 @@ class MainViewModel(
         )
     }
 
+    /** Server model tier for the selected task profile. The server maps
+     * `complex` -> PRO model, `fast` -> fast model, anything else ->
+     * primary model — see `POST /api/chat` in server.ts. */
+    private fun modelTierFor(taskProfile: AiTaskProfile): String = when (taskProfile) {
+        AiTaskProfile.FAST -> "fast"
+        AiTaskProfile.DEEP_REASONING -> "complex"
+        else -> "general"
+    }
+
     fun sendAiMessage(
         userPrompt: String,
         attachedDocumentText: String = "",
@@ -863,64 +896,60 @@ class MainViewModel(
             _bannerMessage.value = "Complete workspace setup first to chat with your AI team."
             return
         }
-        val clean = userPrompt.trim()
-        if (clean.isEmpty() && attachedBitmap == null) return
-        val effectivePrompt = clean.ifEmpty { "Please analyze this job site photo and suggest next steps." }
         val employeeId = _aiState.value.selectedEmployeeId
         val taskProfile = _aiState.value.selectedTaskProfile
-        val resolvedModel = aiRepo.resolveModelName(
-            employeeId = employeeId,
-            taskProfile = taskProfile,
-            hasMultimodalOrDoc = attachedBitmap != null || attachedDocumentText.isNotBlank()
-        )
+        val attachedDocIds = _attachedDocumentIds.value.toList()
+        val clean = userPrompt.trim()
+        if (clean.isEmpty() && attachedBitmap == null && attachedDocIds.isEmpty()) return
+        val effectivePrompt = when {
+            clean.isNotEmpty() -> clean
+            attachedBitmap != null -> "Please analyze this job site photo and suggest next steps."
+            else -> "Please review the attached document and summarize the key details."
+        }
         val existingHistory = (chatMessagesState.value as? UiState.Success)?.data
             .orEmpty()
             .filter { it.employeeId == employeeId || it.employeeId.isBlank() }
 
         viewModelScope.launch {
             _aiState.value = _aiState.value.copy(
-                activeModelId = resolvedModel,
+                // The reply comes from the Railway server, not from a
+                // model running on the phone — say so until the real
+                // model id arrives with the reply.
+                activeModelId = "Railway",
                 isStreaming = true,
                 streamingText = "",
                 error = null
             )
-            repository.saveChatMessage(
-                biz,
-                ChatMessage(
-                    businessId = biz.id,
-                    senderId = currentUserId,
-                    senderName = currentUserName.ifBlank { "Owner" },
-                    employeeId = employeeId,
-                    role = "user",
-                    text = effectivePrompt
-                )
+            val userMessage = ChatMessage(
+                businessId = biz.id,
+                senderId = currentUserId,
+                senderName = currentUserName.ifBlank { "Owner" },
+                employeeId = employeeId,
+                role = "user",
+                text = effectivePrompt
             )
-            try {
-                var finalReply = ""
-                var modelUsed = resolvedModel
-                aiRepo.streamAssistantReply(
-                    prompt = effectivePrompt,
-                    historyMessages = existingHistory,
-                    taskProfile = taskProfile,
-                    business = biz,
+            repository.saveChatMessage(biz, userMessage)
+            // Photos have no server endpoint (`POST /api/chat` is
+            // text-only), so they still go through direct Gemini
+            // (AiRepository) with the same per-business system prompt.
+            // Text + server documents always go through /api/chat.
+            if (attachedBitmap != null) {
+                sendAiMessageViaDirectGemini(
+                    biz = biz,
                     employeeId = employeeId,
-                    customers = (customersState.value as? UiState.Success)?.data.orEmpty(),
-                    jobs = (jobsState.value as? UiState.Success)?.data.orEmpty(),
-                    tasks = (tasksState.value as? UiState.Success)?.data.orEmpty(),
-                    calls = (callsState.value as? UiState.Success)?.data.orEmpty(),
-                    actions = (actionsState.value as? UiState.Success)?.data.orEmpty(),
+                    taskProfile = taskProfile,
+                    effectivePrompt = effectivePrompt,
+                    existingHistory = existingHistory,
                     attachedDocumentText = attachedDocumentText,
                     attachedBitmap = attachedBitmap
-                ).collect { event ->
-                    finalReply = event.accumulatedText
-                    modelUsed = event.modelUsed
-                    _aiState.value = _aiState.value.copy(
-                        activeModelId = modelUsed,
-                        streamingText = finalReply
-                    )
-                }
-
-                if (finalReply.isNotBlank()) {
+                )
+                return@launch
+            }
+            val history = existingHistory.takeLast(23) + userMessage
+            when (val result = serverApi.postChat(history, employeeId, modelTierFor(taskProfile), biz.id, attachedDocIds)) {
+                is ApiResult.Success -> {
+                    val reply = result.data
+                    _aiState.value = _aiState.value.copy(activeModelId = reply.modelUsed)
                     repository.saveChatMessage(
                         biz,
                         ChatMessage(
@@ -929,60 +958,156 @@ class MainViewModel(
                             senderName = RcosDefaults.AI_EMPLOYEES.firstOrNull { it.id == employeeId }?.name ?: "AI Assistant",
                             employeeId = employeeId,
                             role = "assistant",
-                            text = finalReply,
-                            modelUsed = modelUsed
+                            text = reply.content,
+                            modelUsed = reply.modelUsed
                         )
                     )
+                    if (reply.isFallback) {
+                        _bannerMessage.value = "The server's AI is down — this reply came from its offline fallback. Check it before acting on it."
+                    }
+                    _aiState.value = _aiState.value.copy(isStreaming = false, streamingText = "")
                 }
-                _aiState.value = _aiState.value.copy(isStreaming = false, streamingText = "")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "AI Assistant error", e)
-                _aiState.value = _aiState.value.copy(
-                    isStreaming = false,
-                    streamingText = "",
-                    error = e.localizedMessage ?: "AI Assistant encountered an error."
-                )
+                is ApiResult.HttpError -> {
+                    Log.w(TAG, "Server chat failed: ${result.status} ${result.message}")
+                    _aiState.value = _aiState.value.copy(
+                        isStreaming = false,
+                        streamingText = "",
+                        error = result.message
+                    )
+                }
+                is ApiResult.NetworkError -> {
+                    _aiState.value = _aiState.value.copy(
+                        isStreaming = false,
+                        streamingText = "",
+                        error = "Server unreachable - check your connection and try again."
+                    )
+                }
             }
         }
     }
 
-    // ---- Gemini Live Voice Conversations ----
+    /** Photo path only: direct Gemini via AiRepository, exactly as
+     * Phase 1 wired it. Text chat never comes here — it goes through
+     * the server (see [sendAiMessage]). */
+    private suspend fun sendAiMessageViaDirectGemini(
+        biz: BusinessAccount,
+        employeeId: String,
+        taskProfile: AiTaskProfile,
+        effectivePrompt: String,
+        existingHistory: List<ChatMessage>,
+        attachedDocumentText: String,
+        attachedBitmap: Bitmap?
+    ) {
+        val resolvedModel = aiRepo.resolveModelName(
+            employeeId = employeeId,
+            taskProfile = taskProfile,
+            hasMultimodalOrDoc = attachedBitmap != null || attachedDocumentText.isNotBlank()
+        )
+        _aiState.value = _aiState.value.copy(activeModelId = resolvedModel)
+        try {
+            var finalReply = ""
+            var modelUsed = resolvedModel
+            aiRepo.streamAssistantReply(
+                prompt = effectivePrompt,
+                historyMessages = existingHistory,
+                taskProfile = taskProfile,
+                business = biz,
+                employeeId = employeeId,
+                customers = (customersState.value as? UiState.Success)?.data.orEmpty(),
+                jobs = (jobsState.value as? UiState.Success)?.data.orEmpty(),
+                tasks = (tasksState.value as? UiState.Success)?.data.orEmpty(),
+                calls = (callsState.value as? UiState.Success)?.data.orEmpty(),
+                actions = (actionsState.value as? UiState.Success)?.data.orEmpty(),
+                attachedDocumentText = attachedDocumentText,
+                attachedBitmap = attachedBitmap
+            ).collect { event ->
+                finalReply = event.accumulatedText
+                modelUsed = event.modelUsed
+                _aiState.value = _aiState.value.copy(
+                    activeModelId = modelUsed,
+                    streamingText = finalReply
+                )
+            }
+
+            if (finalReply.isNotBlank()) {
+                repository.saveChatMessage(
+                    biz,
+                    ChatMessage(
+                        businessId = biz.id,
+                        senderId = employeeId,
+                        senderName = RcosDefaults.AI_EMPLOYEES.firstOrNull { it.id == employeeId }?.name ?: "AI Assistant",
+                        employeeId = employeeId,
+                        role = "assistant",
+                        text = finalReply,
+                        modelUsed = modelUsed
+                    )
+                )
+            }
+            _aiState.value = _aiState.value.copy(isStreaming = false, streamingText = "")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "AI Assistant error", e)
+            _aiState.value = _aiState.value.copy(
+                isStreaming = false,
+                streamingText = "",
+                error = e.localizedMessage ?: "AI Assistant encountered an error."
+            )
+        }
+    }
+
+    // ---- Live Voice Conversations (LiveKit + Gemini realtime) ----
+    /** Server persona for an employee id. Unknown ids fall back to
+     * `executive` — the server itself also falls back to
+     * executive_assistant for unknown roleIds. */
+    private fun personaForEmployee(employeeId: String): String = when (employeeId) {
+        "ai_receptionist" -> "receptionist"
+        "sales" -> "sales"
+        "operations" -> "operations"
+        "customer_service" -> "support"
+        "technician" -> "technician"
+        "finance" -> "finance"
+        "marketing" -> "marketing"
+        else -> "executive"
+    }
+
     fun startLiveVoiceConversation(employeeIdOverride: String? = null) {
         val employeeId = employeeIdOverride ?: _aiState.value.selectedEmployeeId
         val employee = RcosDefaults.AI_EMPLOYEES.firstOrNull { it.id == employeeId }
             ?: RcosDefaults.AI_EMPLOYEES.first()
         val biz = activeBusiness.value
-        val systemPrompt = aiRepo.buildRoleSystemInstruction(
-            business = biz,
-            employeeId = employee.id,
-            customers = (customersState.value as? UiState.Success)?.data.orEmpty(),
-            jobs = (jobsState.value as? UiState.Success)?.data.orEmpty(),
-            tasks = (tasksState.value as? UiState.Success)?.data.orEmpty(),
-            calls = (callsState.value as? UiState.Success)?.data.orEmpty(),
-            actions = (actionsState.value as? UiState.Success)?.data.orEmpty(),
-            isVoiceMode = true
-        )
+        val persona = personaForEmployee(employee.id)
 
         viewModelScope.launch {
             liveTimerJob?.cancel()
             _liveVoiceState.value = LiveVoiceUiState(
                 status = LiveVoiceStatus.CONNECTING,
-                modelId = MODEL_GEMINI_LIVE,
+                modelId = MODEL_LIVEKIT_VOICE,
                 activeRoleName = employee.name,
                 durationSeconds = 0,
-                statusDetail = "Connecting to $MODEL_GEMINI_LIVE...",
+                statusDetail = "Connecting to LiveKit voice...",
                 error = null
             )
-            liveVoiceManager.startConversation(systemInstructionText = systemPrompt)
-                .onSuccess { connectedModelId ->
+            _isSpeakerphone.value = false
+            if (biz == null) {
+                _liveVoiceState.value = LiveVoiceUiState(
+                    status = LiveVoiceStatus.ERROR,
+                    modelId = MODEL_LIVEKIT_VOICE,
+                    activeRoleName = employee.name,
+                    durationSeconds = 0,
+                    statusDetail = "Voice session unavailable",
+                    error = "Complete workspace setup first to use live voice."
+                )
+                return@launch
+            }
+            liveKitVoiceManager.startConversation(businessId = biz.id, persona = persona)
+                .onSuccess {
                     _liveVoiceState.value = LiveVoiceUiState(
                         status = LiveVoiceStatus.LIVE,
-                        modelId = connectedModelId,
+                        modelId = MODEL_LIVEKIT_VOICE,
                         activeRoleName = employee.name,
                         durationSeconds = 0,
-                        statusDetail = "Listening & speaking live • $connectedModelId",
+                        statusDetail = "Listening & speaking live • LiveKit",
                         error = null
                     )
                     liveTimerJob = viewModelScope.launch {
@@ -995,10 +1120,10 @@ class MainViewModel(
                     }
                 }
                 .onFailure { e ->
-                    val msg = e.localizedMessage ?: "Could not start Gemini Live voice conversation."
+                    val msg = e.localizedMessage ?: "Could not start the live voice conversation."
                     _liveVoiceState.value = LiveVoiceUiState(
                         status = LiveVoiceStatus.ERROR,
-                        modelId = MODEL_GEMINI_LIVE,
+                        modelId = MODEL_LIVEKIT_VOICE,
                         activeRoleName = employee.name,
                         durationSeconds = 0,
                         statusDetail = "Voice session unavailable",
@@ -1008,14 +1133,13 @@ class MainViewModel(
         }
     }
 
-    fun sendLiveVoiceNudge(prompt: String) {
-        if (prompt.isBlank()) return
-        viewModelScope.launch {
-            liveVoiceManager.sendTextNudge(prompt)
-                .onFailure { e ->
-                    _bannerMessage.value = e.localizedMessage ?: "Failed to send voice prompt."
-                }
-        }
+    /** Speakerphone toggle for the live session. The session always
+     * starts on the earpiece; this flips it and reports the actual
+     * state back (see LiveKitVoiceManager.setSpeakerphone). */
+    fun toggleLiveVoiceSpeakerphone() {
+        val current = _liveVoiceState.value
+        if (current.status != LiveVoiceStatus.LIVE && current.status != LiveVoiceStatus.CONNECTING) return
+        _isSpeakerphone.value = liveKitVoiceManager.setSpeakerphone(!_isSpeakerphone.value)
     }
 
     fun stopLiveVoiceConversation(logSession: Boolean = true) {
@@ -1025,15 +1149,16 @@ class MainViewModel(
         liveTimerJob?.cancel()
         liveTimerJob = null
         viewModelScope.launch {
-            liveVoiceManager.stopConversation()
+            liveKitVoiceManager.stopConversation()
             _liveVoiceState.value = LiveVoiceUiState()
+            _isSpeakerphone.value = false
             val biz = activeBusiness.value
             if (logSession && wasLive && elapsedSec >= 2 && biz != null) {
                 val mins = elapsedSec / 60
                 val secs = elapsedSec % 60
                 val durationLabel = if (mins > 0) "${mins}m ${secs}s" else "${secs}s"
                 val timeLabel = SimpleDateFormat("h:mm a", Locale.US).format(Date())
-                val boundedCallerId = current.modelId.ifBlank { MODEL_GEMINI_LIVE }.take(30)
+                val boundedCallerId = current.modelId.ifBlank { MODEL_LIVEKIT_VOICE }.take(30)
                 repository.createCallRecord(
                     biz,
                     CallRecord(
@@ -1044,7 +1169,7 @@ class MainViewModel(
                         status = CallStatus.COMPLETED.code,
                         durationLabel = durationLabel,
                         timeLabel = timeLabel,
-                        summary = "Real-time Gemini Live voice session (${current.modelId}) with ${current.activeRoleName}",
+                        summary = "Real-time LiveKit voice session with ${current.activeRoleName}",
                         answeredBy = "ai_receptionist"
                     )
                 )
@@ -1054,6 +1179,123 @@ class MainViewModel(
 
     fun dismissLiveVoiceError() {
         _liveVoiceState.value = LiveVoiceUiState()
+        _isSpeakerphone.value = false
+    }
+
+    // ---- Assistant documents (server-side) ----
+    /** List this business's assistant documents (newest first). */
+    fun refreshAssistantDocuments() {
+        val biz = activeBusiness.value ?: return
+        viewModelScope.launch {
+            when (val result = serverApi.listAssistantDocuments(biz.id)) {
+                is ApiResult.Success -> {
+                    _documents.value = result.data
+                    _documentError.value = null
+                }
+                is ApiResult.HttpError -> _documentError.value = result.message
+                is ApiResult.NetworkError -> _documentError.value = "Server unreachable - documents could not be listed."
+            }
+        }
+    }
+
+    /** Upload one document (PDF / Word / text / CSV, 10 MB max — the
+     * server answers 422 when it is too big or has no readable text).
+     * A successful upload is attached to the next chat message
+     * automatically, so Ryan can ask about it right away. */
+    fun uploadAssistantDocument(name: String, mimeType: String, fileBase64: String) {
+        val biz = activeBusiness.value ?: run {
+            _documentError.value = "Complete workspace setup first to upload documents."
+            return
+        }
+        viewModelScope.launch {
+            _isUploadingDocument.value = true
+            _documentError.value = null
+            when (val result = serverApi.uploadAssistantDocument(biz.id, name, mimeType, fileBase64)) {
+                is ApiResult.Success -> {
+                    _documents.value = listOf(result.data) + _documents.value
+                    _attachedDocumentIds.value = _attachedDocumentIds.value + result.data.id
+                    _bannerMessage.value = "Document uploaded: ${result.data.name}"
+                }
+                is ApiResult.HttpError -> _documentError.value = result.message
+                is ApiResult.NetworkError -> _documentError.value = "Server unreachable - document could not be uploaded."
+            }
+            _isUploadingDocument.value = false
+        }
+    }
+
+    fun toggleAttachDocument(documentId: String) {
+        _attachedDocumentIds.value = if (documentId in _attachedDocumentIds.value) {
+            _attachedDocumentIds.value - documentId
+        } else {
+            _attachedDocumentIds.value + documentId
+        }
+    }
+
+    fun deleteAssistantDocument(documentId: String) {
+        val biz = activeBusiness.value ?: return
+        viewModelScope.launch {
+            when (val result = serverApi.deleteAssistantDocument(biz.id, documentId)) {
+                is ApiResult.Success -> {
+                    _documents.value = _documents.value.filterNot { it.id == documentId }
+                    _attachedDocumentIds.value = _attachedDocumentIds.value - documentId
+                }
+                is ApiResult.HttpError -> _documentError.value = result.message
+                is ApiResult.NetworkError -> _documentError.value = "Server unreachable - document could not be deleted."
+            }
+        }
+    }
+
+    /** Draft a job from a document, the way the old app does it: send
+     * Morgan a chat message ("Create a job for {client} about
+     * {scope}") with the document attached. Nothing is created until
+     * the draft is confirmed — the in-chat job-confirmation card is
+     * Phase 5 work. */
+    fun createJobFromDocument(document: AssistantDocument) {
+        val extracted = document.extracted
+        val client = extracted.contactName.ifBlank { extracted.companyName }
+        if (client.isBlank()) {
+            _bannerMessage.value = "This document does not name a client, so a job cannot be drafted from it."
+            return
+        }
+        val scope = extracted.notes.ifBlank { document.name }
+        _attachedDocumentIds.value = _attachedDocumentIds.value + document.id
+        sendAiMessage(userPrompt = "Create a job for $client about $scope")
+    }
+
+    /** Add the document's client as a customer (two-tap confirm in
+     * the UI — this only runs on the second tap). Uses the extracted
+     * name, phone, and email; the server extracts no address, so the
+     * address stays blank for Ryan to fill in. */
+    fun addClientFromDocument(document: AssistantDocument) {
+        val biz = activeBusiness.value ?: return
+        val extracted = document.extracted
+        val name = extracted.contactName.ifBlank { extracted.companyName }
+        if (name.isBlank()) {
+            _bannerMessage.value = "This document does not name a client, so no customer can be added from it."
+            return
+        }
+        viewModelScope.launch {
+            repository.createCustomer(
+                biz,
+                Customer(
+                    businessId = biz.id,
+                    name = name.trim(),
+                    company = extracted.companyName.trim(),
+                    phone = extracted.phone.trim(),
+                    email = extracted.email.trim(),
+                    address = "",
+                    status = CustomerStatus.ACTIVE.code,
+                    healthScore = 92L,
+                    lastContactDate = SimpleDateFormat("MMM dd", Locale.US).format(Date()),
+                    serviceType = "",
+                    aiSummary = extracted.notes.trim()
+                )
+            ).onSuccess {
+                _bannerMessage.value = "$name added to Customers."
+            }.onFailure { e ->
+                _bannerMessage.value = e.localizedMessage ?: "Failed to add customer."
+            }
+        }
     }
 
     // ---- Quotes / Invoices / Approvals ----
@@ -1491,7 +1733,7 @@ class MainViewModel(
     override fun onCleared() {
         liveTimerJob?.cancel()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            liveVoiceManager.stopConversation()
+            liveKitVoiceManager.stopConversation()
         }
         super.onCleared()
     }

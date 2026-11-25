@@ -95,4 +95,7 @@ dependencies {
 
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.vico.compose.m3)
+
+    // Phase 3 — LiveKit room client for in-app live voice (Assistant + Calls).
+    implementation(libs.livekit.android)
 }

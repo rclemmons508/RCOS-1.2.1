@@ -75,7 +75,7 @@ import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.rcsolutions.rcosmobile.data.AiRepository
 import com.rcsolutions.rcosmobile.data.ConnectivityMonitor
-import com.rcsolutions.rcosmobile.data.LiveVoiceManager
+import com.rcsolutions.rcosmobile.data.LiveKitVoiceManager
 import com.rcsolutions.rcosmobile.data.RcosRepository
 import com.rcsolutions.rcosmobile.data.ServerApiClient
 import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
@@ -191,7 +191,7 @@ private fun RcosAppRoot() {
                             repository = RcosRepository(appContext),
                             prefsRepo = UserPreferencesRepository(appContext),
                             aiRepo = AiRepository(),
-                            liveVoiceManager = LiveVoiceManager(),
+                            liveKitVoiceManager = LiveKitVoiceManager(appContext),
                             weatherService = WeatherService(),
                             serverApi = ServerApiClient(),
                             connectivityMonitor = ConnectivityMonitor(appContext),
@@ -237,6 +237,11 @@ private fun AuthenticatedAuroraShell(
     val auditLogsState by viewModel.auditLogsState.collectAsStateWithLifecycle()
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
     val liveVoiceState by viewModel.liveVoiceState.collectAsStateWithLifecycle()
+    val documents by viewModel.documents.collectAsStateWithLifecycle()
+    val attachedDocumentIds by viewModel.attachedDocumentIds.collectAsStateWithLifecycle()
+    val isUploadingDocument by viewModel.isUploadingDocument.collectAsStateWithLifecycle()
+    val documentError by viewModel.documentError.collectAsStateWithLifecycle()
+    val isSpeakerphone by viewModel.isSpeakerphone.collectAsStateWithLifecycle()
     val isMutating by viewModel.isMutating.collectAsStateWithLifecycle()
     val isOperationalSyncing by viewModel.isOperationalSyncing.collectAsStateWithLifecycle()
     val lastOperationalSyncLabel by viewModel.lastOperationalSyncLabel.collectAsStateWithLifecycle()
@@ -545,10 +550,18 @@ private fun AuthenticatedAuroraShell(
                             }
 
                             composable<AiRoute> {
+                                LaunchedEffect(activeBusiness?.id) {
+                                    if (activeBusiness != null) viewModel.refreshAssistantDocuments()
+                                }
                                 AiAssistantScreen(
                                     aiState = aiState,
                                     liveVoiceState = liveVoiceState,
                                     messages = chatMessages,
+                                    documents = documents,
+                                    attachedDocumentIds = attachedDocumentIds,
+                                    isUploadingDocument = isUploadingDocument,
+                                    documentError = documentError,
+                                    isSpeakerphone = isSpeakerphone,
                                     onSelectEmployee = { viewModel.selectAiEmployee(it) },
                                     onSelectTaskProfile = { viewModel.selectAiTaskProfile(it) },
                                     onSendMessage = { prompt, docText, bmp ->
@@ -556,7 +569,14 @@ private fun AuthenticatedAuroraShell(
                                     },
                                     onStartLiveVoice = { viewModel.startLiveVoiceConversation() },
                                     onStopLiveVoice = { viewModel.stopLiveVoiceConversation() },
-                                    onSendLiveVoiceNudge = { viewModel.sendLiveVoiceNudge(it) },
+                                    onUploadDocument = { name, mimeType, fileBase64 ->
+                                        viewModel.uploadAssistantDocument(name, mimeType, fileBase64)
+                                    },
+                                    onToggleAttachDocument = { viewModel.toggleAttachDocument(it) },
+                                    onDeleteDocument = { viewModel.deleteAssistantDocument(it) },
+                                    onCreateJobFromDocument = { viewModel.createJobFromDocument(it) },
+                                    onAddClientFromDocument = { viewModel.addClientFromDocument(it) },
+                                    onToggleSpeakerphone = { viewModel.toggleLiveVoiceSpeakerphone() },
                                     onDismissLiveVoiceError = { viewModel.dismissLiveVoiceError() }
                                 )
                             }
