@@ -4,7 +4,6 @@ import android.content.Context
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
-import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -82,7 +81,7 @@ class RcosRepository(
         emitAll(
             query.snapshots()
                 .map { snapshot ->
-                    sorter(snapshot.toObjects(clazz, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE))
+                    sorter(snapshot.toModels(clazz))
                 }
                 .catch { error ->
                     val firestoreError = generateSequence(error) { it.cause }
@@ -720,7 +719,7 @@ class RcosRepository(
         val current = requireUserId()
         require(current == uid) { "A user can only load their own profile." }
         val snap = db.collection("users").document(uid).get().await()
-        return snap.toObject(UserProfile::class.java)
+        return snap.toModel(UserProfile::class.java)
     }
 
     suspend fun saveUserProfile(profile: UserProfile): Result<Unit> {
@@ -1014,7 +1013,7 @@ class RcosRepository(
                 .whereArrayContains("memberUids", uid)
                 .get(Source.DEFAULT)
                 .await()
-            val jobs = snapshot.toObjects(Job::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            val jobs = snapshot.toModels(Job::class.java)
                 .sortedBy { "${it.scheduledDate} ${it.scheduledTime}" }
             Result.success(jobs)
         } catch (e: CancellationException) {
