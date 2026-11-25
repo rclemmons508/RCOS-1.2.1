@@ -58,11 +58,22 @@ jobs:
           echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 -d > app/google-services.json
           ls -l app/google-services.json
 
-      - name: Generate debug keystore if missing
+      - name: Restore stable debug keystore from secret
+        # Login fix (Nov 25): every CI run used to generate a FRESH debug
+        # keystore here, so each APK was signed with a SHA-1 that is not
+        # registered in Firebase — Google Sign-In rejected the caller and
+        # the login screen hung with no error after picking an account.
+        # The keystore is now stable: one keystore, stored as the
+        # DEBUG_KEYSTORE_BASE64 repo secret, restored on every run. Its
+        # SHA-1 must be registered in Firebase Console > Project settings >
+        # Android app > SHA certificate fingerprints (see README).
+        # Never commit debug.keystore to the repo.
         run: |
-          if [ ! -f debug.keystore ]; then
-            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          if [ -z "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
+            echo "::error::Missing secret DEBUG_KEYSTORE_BASE64. Add it in GitHub > Settings > Secrets and variables > Actions, as base64 of the stable debug.keystore (see README). Do NOT commit debug.keystore to the repo."
+            exit 1
           fi
+          echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > debug.keystore
           ls -l debug.keystore
 
       - name: Set up Gradle 9.3.1
