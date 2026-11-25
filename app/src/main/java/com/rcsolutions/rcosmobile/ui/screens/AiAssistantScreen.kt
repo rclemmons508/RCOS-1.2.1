@@ -8,7 +8,9 @@ import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.os.Build
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.speech.RecognizerIntent
+import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -46,6 +48,7 @@ import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -71,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.rcsolutions.rcosmobile.data.AssistantDocument
 import com.rcsolutions.rcosmobile.data.RcosDefaults
 import com.rcsolutions.rcosmobile.model.AiTaskProfile
 import com.rcsolutions.rcosmobile.model.ChatMessage
@@ -95,12 +99,22 @@ fun AiAssistantScreen(
     aiState: AiConsoleState,
     liveVoiceState: LiveVoiceUiState,
     messages: List<ChatMessage>,
+    documents: List<AssistantDocument>,
+    attachedDocumentIds: Set<String>,
+    isUploadingDocument: Boolean,
+    documentError: String?,
+    isSpeakerphone: Boolean,
     onSelectEmployee: (String) -> Unit,
     onSelectTaskProfile: (AiTaskProfile) -> Unit,
     onSendMessage: (prompt: String, docText: String, bitmap: Bitmap?) -> Unit,
     onStartLiveVoice: () -> Unit,
     onStopLiveVoice: () -> Unit,
-    onSendLiveVoiceNudge: (String) -> Unit,
+    onUploadDocument: (name: String, mimeType: String, fileBase64: String) -> Unit,
+    onToggleAttachDocument: (String) -> Unit,
+    onDeleteDocument: (String) -> Unit,
+    onCreateJobFromDocument: (AssistantDocument) -> Unit,
+    onAddClientFromDocument: (AssistantDocument) -> Unit,
+    onToggleSpeakerphone: () -> Unit,
     onDismissLiveVoiceError: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -110,6 +124,7 @@ fun AiAssistantScreen(
     var attachedDocName by remember { mutableStateOf("") }
     var attachedDocText by remember { mutableStateOf("") }
     var micPermissionError by remember { mutableStateOf<String?>(null) }
+    var localUploadError by remember { mutableStateOf<String?>(null) }
 
     val listState = rememberLazyListState()
 
@@ -120,7 +135,7 @@ fun AiAssistantScreen(
             micPermissionError = null
             onStartLiveVoice()
         } else {
-            micPermissionError = "Microphone permission is required for real-time Gemini Live voice conversations."
+            micPermissionError = "Microphone permission is required for live voice conversations."
         }
     }
 
@@ -161,12 +176,31 @@ fun AiAssistantScreen(
                     }
                 }.getOrNull()
             } else {
-                val readText = runCatching {
-                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                }.getOrNull().orEmpty()
-                if (readText.isNotBlank()) {
-                    attachedDocName = uri.lastPathSegment ?: "Attached document"
-                    attachedDocText = readText.take(4000)
+                // Documents go to the server (POST /api/assistant/documents):
+                // text is extracted there and the details are pulled into
+                // jobs/clients. The old inline 4000-char read is gone —
+                // the server is the only reader now.
+                val name = runCatching {
+                    context.contentResolver.query(
+                        uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    }
+                }.getOrNull() ?: uri.lastPathSegment ?: "Document"
+                val bytes = runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }.getOrNull()
+                when {
+                    bytes == null -> localUploadError = "Could not read that file."
+                    bytes.size > 10 * 1024 * 1024 -> localUploadError = "That file is over the 10 MB limit."
+                    else -> {
+                        localUploadError = null
+                        onUploadDocument(
+                            name,
+                            mime.ifBlank { "application/octet-stream" },
+                            Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        )
+                    }
                 }
             }
         }
@@ -216,7 +250,7 @@ fun AiAssistantScreen(
 
     fun submitCurrentPrompt(promptOverride: String? = null) {
         val prompt = (promptOverride ?: inputText).trim()
-        if (prompt.isEmpty() && attachedBitmap == null) return
+        if (prompt.isEmpty() && attachedBitmap == null && attachedDocumentIds.isEmpty()) return
         onSendMessage(prompt, attachedDocText, attachedBitmap)
         if (promptOverride == null) inputText = ""
         attachedBitmap = null
@@ -360,13 +394,14 @@ fun AiAssistantScreen(
             }
         }
 
-        // Real-Time Gemini Live Voice Session Card
+        // LiveKit Live Voice Session Card
         if (liveVoiceState.status != LiveVoiceStatus.IDLE) {
             Spacer(Modifier.height(6.dp))
             LiveVoiceSessionBanner(
                 state = liveVoiceState,
+                isSpeakerphone = isSpeakerphone,
                 onEndVoice = onStopLiveVoice,
-                onNudge = onSendLiveVoiceNudge,
+                onToggleSpeakerphone = onToggleSpeakerphone,
                 onDismissError = onDismissLiveVoiceError
             )
         }
@@ -394,6 +429,45 @@ fun AiAssistantScreen(
                     }
                 }
             }
+        }
+
+        // Assistant documents (server-side). Visible only when there is
+        // something to show: documents, an upload in flight, or an error.
+        if (documents.isNotEmpty() || isUploadingDocument || documentError != null || localUploadError != null) {
+            Spacer(Modifier.height(6.dp))
+            AuroraCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("ai_documents_section")
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Documents",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = AuroraTextPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (isUploadingDocument) {
+                        CircularProgressIndicator(color = AuroraEmerald, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    }
+                }
+                val docError = documentError ?: localUploadError
+                if (docError != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(text = docError, style = MaterialTheme.typography.labelSmall, color = AuroraRed)
+                }
+                documents.forEach { doc ->
+                    AssistantDocumentRow(
+                        document = doc,
+                        attached = doc.id in attachedDocumentIds,
+                        onToggleAttach = { onToggleAttachDocument(doc.id) },
+                        onDelete = { onDeleteDocument(doc.id) },
+                        onCreateJob = { onCreateJobFromDocument(doc) },
+                        onAddClient = { onAddClientFromDocument(doc) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
         }
 
         // Main Body: Either Hero Orb + 5 Starter Prompts OR Scrollable Multi-Turn Conversation Thread
@@ -686,7 +760,7 @@ fun AiAssistantScreen(
                 label = "Attach",
                 icon = Icons.Outlined.AttachFile,
                 testTag = "ai_attach_button",
-                onClick = { fileLauncher.launch(arrayOf("image/*", "text/*")) },
+                onClick = { fileLauncher.launch(arrayOf("image/*", "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/*")) },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -694,10 +768,97 @@ fun AiAssistantScreen(
 }
 
 @Composable
+private fun AssistantDocumentRow(
+    document: AssistantDocument,
+    attached: Boolean,
+    onToggleAttach: () -> Unit,
+    onDelete: () -> Unit,
+    onCreateJob: () -> Unit,
+    onAddClient: () -> Unit
+) {
+    // Two-tap confirm for the record-creating / destructive actions:
+    // first tap arms ("Confirm?"), second tap runs it. "Job" needs no
+    // confirm — it only asks Morgan to draft in chat (Phase 5 owns the
+    // in-chat job-confirmation card).
+    var confirmAction by remember { mutableStateOf<String?>(null) }
+    val extracted = document.extracted
+    val who = listOf(extracted.contactName, extracted.companyName)
+        .filter { it.isNotBlank() }.joinToString(" • ")
+    val detail = listOf(who, extracted.phone, extracted.email)
+        .filter { it.isNotBlank() }.joinToString(" • ")
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = document.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AuroraTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (detail.isNotBlank()) detail else "No contact details extracted",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AuroraTextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = formatFileSize(document.sizeBytes),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AuroraTextMuted
+                )
+            }
+            TextButton(onClick = onToggleAttach) {
+                Text(
+                    if (attached) "Attached" else "Attach",
+                    color = if (attached) AuroraEmerald else AuroraTextSecondary
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+            TextButton(onClick = onCreateJob) {
+                Text("Job", color = AuroraEmerald)
+            }
+            TextButton(onClick = {
+                if (confirmAction == "client") {
+                    confirmAction = null
+                    onAddClient()
+                } else {
+                    confirmAction = "client"
+                }
+            }) {
+                Text(if (confirmAction == "client") "Confirm add?" else "Client", color = AuroraEmerald)
+            }
+            TextButton(onClick = {
+                if (confirmAction == "delete") {
+                    confirmAction = null
+                    onDelete()
+                } else {
+                    confirmAction = "delete"
+                }
+            }) {
+                Text(if (confirmAction == "delete") "Confirm delete?" else "Delete", color = AuroraRed)
+            }
+        }
+    }
+}
+
+/** File size as "12 KB" / "1.2 MB" — same shape as the old app's
+ * `formatFileSize` in `src/lib/assistantDocuments.ts`. */
+private fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0) return ""
+    if (bytes < 1024) return "$bytes B"
+    if (bytes < 1024 * 1024) return "${bytes / 1024} KB"
+    return "%.1f MB".format(Locale.US, bytes / (1024.0 * 1024.0))
+}
+
+@Composable
 private fun LiveVoiceSessionBanner(
     state: LiveVoiceUiState,
+    isSpeakerphone: Boolean,
     onEndVoice: () -> Unit,
-    onNudge: (String) -> Unit,
+    onToggleSpeakerphone: () -> Unit,
     onDismissError: () -> Unit
 ) {
     val isError = state.status == LiveVoiceStatus.ERROR
@@ -722,7 +883,7 @@ private fun LiveVoiceSessionBanner(
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (isError) "Gemini Live Error" else "${state.activeRoleName} • Live Voice",
+                    text = if (isError) "Live Voice Error" else "${state.activeRoleName} • Live Voice",
                     style = MaterialTheme.typography.titleSmall,
                     color = if (isError) AuroraRed else AuroraEmerald
                 )
@@ -754,32 +915,36 @@ private fun LiveVoiceSessionBanner(
             }
         }
         if (isLive) {
+            // The LiveKit agent has no text-injection channel (the
+            // server worker only listens to audio), so the old Gemini
+            // Live nudge chips are gone. Speak to the agent, or send
+            // the question in text chat instead.
             Spacer(Modifier.height(8.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                listOf(
-                    "Brief me on today's jobs",
-                    "Any approvals waiting?",
-                    "Summarize missed calls"
-                ).forEach { nudge ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = AuroraCardElevated,
-                        border = BorderStroke(1.dp, AuroraBorder),
-                        modifier = Modifier.clickable { onNudge(nudge) }
-                    ) {
-                        Text(
-                            text = nudge,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AuroraEmerald,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
+                OutlinedButton(
+                    onClick = onToggleSpeakerphone,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, AuroraBorder),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .height(36.dp)
+                        .testTag("ai_live_voice_speaker_button")
+                ) {
+                    Text(
+                        if (isSpeakerphone) "Speakerphone: On" else "Speakerphone: Off",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AuroraTextPrimary
+                    )
                 }
+                Text(
+                    text = "Voice starts on the earpiece.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AuroraTextSecondary
+                )
             }
         }
     }

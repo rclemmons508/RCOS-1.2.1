@@ -38,6 +38,9 @@ private const val TAG = "ServerApi"
  * server; override with the `rcosApiBaseUrl` Gradle property
  * (`-PrcosApiBaseUrl=...` or `local.properties`). No API key, LiveKit
  * secret, Vonage key, or Firebase key lives in this file or in git.
+ *
+ * Phase 3 adds `POST /api/voice/token` and the assistant-documents
+ * endpoints (`POST` / `GET` / `DELETE /api/assistant/documents`).
  */
 
 // ---- Responses (shapes copied from the old server, server.ts) ----
@@ -94,6 +97,7 @@ data class ChatRequest(
     val roleId: String = "executive_assistant",
     val modelTier: String = "general",
     val businessId: String = "",
+    val documentIds: List<String> = emptyList(),
 )
 
 /** POST /api/chat response. When Gemini is down the server still
@@ -133,6 +137,67 @@ data class GmailOAuthStart(
     val url: String = "",
     val state: String = "",
     val expiresAt: String = "",
+)
+
+/** POST /api/voice/token request. `persona` is one of the server's
+ * personas: receptionist | sales | operations | marketing | support |
+ * executive | technician | finance. */
+@Serializable
+data class VoiceTokenRequest(
+    val businessId: String,
+    val persona: String,
+)
+
+/** POST /api/voice/token response. The server creates the room,
+ * dispatches the `rcos-receptionist` agent, and returns `{token, url,
+ * room}`. 503 when LiveKit is not configured server-side. */
+@Serializable
+data class VoiceTokenResponse(
+    val token: String = "",
+    val url: String = "",
+    val room: String = "",
+)
+
+/** Details the server extracted from an uploaded document
+ * (`POST /api/assistant/documents`). `found` lists which fields were
+ * found (a list of field names, not a boolean). Text is never sent to
+ * the list endpoint. */
+@Serializable
+data class ExtractedDetails(
+    val companyName: String = "",
+    val contactName: String = "",
+    val phone: String = "",
+    val email: String = "",
+    val notes: String = "",
+    val found: List<String> = emptyList(),
+    val source: String = "",
+)
+
+/** One file uploaded to the Assistant page
+ * (`POST /api/assistant/documents` → 201). `uploadedAt` is the
+ * server's ISO timestamp string. */
+@Serializable
+data class AssistantDocument(
+    val id: String = "",
+    val businessId: String = "",
+    val name: String = "",
+    val mimeType: String = "",
+    val sizeBytes: Long = 0,
+    val textChars: Int = 0,
+    val textTruncated: Boolean = false,
+    val extracted: ExtractedDetails = ExtractedDetails(),
+    val uploadedBy: String = "",
+    val uploadedAt: String = "",
+)
+
+/** POST /api/assistant/documents request (old app's client sends
+ * exactly these four fields). */
+@Serializable
+data class UploadAssistantDocumentRequest(
+    val businessId: String,
+    val name: String,
+    val mimeType: String,
+    val fileBase64: String,
 )
 
 // ---- Result type ----
@@ -196,6 +261,7 @@ class ServerApiClient(
         path: String,
         body: String? = null,
         requireAuth: Boolean,
+        timeoutMsOverride: Int? = null,
     ): ApiResult<String> {
         if (requireAuth && auth.currentUser == null) {
             return ApiResult.HttpError(401, "Please sign in to use this feature.")
@@ -209,8 +275,8 @@ class ServerApiClient(
             try {
                 connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
                     requestMethod = method
-                    connectTimeout = timeoutMs
-                    readTimeout = timeoutMs
+                    connectTimeout = timeoutMsOverride ?: timeoutMs
+                    readTimeout = timeoutMsOverride ?: timeoutMs
                     setRequestProperty("Accept", "application/json")
                     if (token != null) setRequestProperty("Authorization", "Bearer $token")
                     if (body != null) {
@@ -277,18 +343,20 @@ class ServerApiClient(
         parse(request("GET", "/api/diagnostics/scan", requireAuth = true))
 
     /**
-     * POST /api/chat — transport only. The Assistant page UI wiring is
-     * Phase 3; this only proves the server round-trip works and returns
+     * POST /api/chat — wired to the Assistant page in Phase 3. Returns
      * the real reply (or the server's honest fallback) or an error.
      * `messages` are the app's [ChatMessage] records; roles map exactly
      * as the server expects. The server refuses (403) a businessId the
-     * caller is not a member of.
+     * caller is not a member of. `documentIds` are server-side
+     * assistant documents the server injects as grounded context (it
+     * never invents details from them).
      */
     suspend fun postChat(
         messages: List<ChatMessage>,
         roleId: String = "executive_assistant",
         modelTier: String = "general",
         businessId: String = "",
+        documentIds: List<String> = emptyList(),
     ): ApiResult<ChatReply> {
         val requestBody = ChatRequest(
             messages = messages.map {
@@ -300,6 +368,7 @@ class ServerApiClient(
             roleId = roleId,
             modelTier = modelTier,
             businessId = businessId,
+            documentIds = documentIds,
         )
         val encoded = json.encodeToString(ChatRequest.serializer(), requestBody)
         return parse(request("POST", "/api/chat", body = encoded, requireAuth = true))
@@ -315,4 +384,63 @@ class ServerApiClient(
      * (deep link back into the app) is Phase 6. */
     suspend fun startGmailOAuth(businessId: String): ApiResult<GmailOAuthStart> =
         parse(request("POST", "/api/business/${encode(businessId)}/gmail/oauth-start", requireAuth = true))
+
+    /** POST /api/voice/token — LiveKit token for a live voice room.
+     * `persona` must be one of the server's personas (see
+     * [VoiceTokenRequest]). 503 = LiveKit is not configured on the
+     * server; 401 = sign-in expired. A token with a blank `token` or
+     * `url` is treated as a failure, never passed to LiveKit. */
+    suspend fun requestVoiceToken(businessId: String, persona: String): ApiResult<VoiceTokenResponse> {
+        val encoded = json.encodeToString(
+            VoiceTokenRequest.serializer(),
+            VoiceTokenRequest(businessId = businessId, persona = persona),
+        )
+        return when (val result = parse<VoiceTokenResponse>(request("POST", "/api/voice/token", body = encoded, requireAuth = true))) {
+            is ApiResult.Success -> if (result.data.token.isBlank() || result.data.url.isBlank()) {
+                ApiResult.HttpError(502, "Voice service returned an incomplete token.")
+            } else {
+                result
+            }
+            else -> result
+        }
+    }
+
+    /** POST /api/assistant/documents — upload one document (PDF, Word,
+     * text, CSV; 10 MB max — the server answers 422 when it is too big
+     * or has no readable text). Extraction can take ~40s, so this call
+     * gets a 60s timeout like the old app's client. The server returns
+     * the 201 document record with extracted details. */
+    suspend fun uploadAssistantDocument(
+        businessId: String,
+        name: String,
+        mimeType: String,
+        fileBase64: String,
+    ): ApiResult<AssistantDocument> {
+        val encoded = json.encodeToString(
+            UploadAssistantDocumentRequest.serializer(),
+            UploadAssistantDocumentRequest(
+                businessId = businessId,
+                name = name,
+                mimeType = mimeType,
+                fileBase64 = fileBase64,
+            ),
+        )
+        return parse(request("POST", "/api/assistant/documents", body = encoded, requireAuth = true, timeoutMsOverride = 60_000))
+    }
+
+    /** GET /api/assistant/documents — this business's documents, newest
+     * first. The server returns a bare JSON array (text is never
+     * included). */
+    suspend fun listAssistantDocuments(businessId: String): ApiResult<List<AssistantDocument>> =
+        parse(request("GET", "/api/assistant/documents?businessId=${encode(businessId)}", requireAuth = true))
+
+    /** DELETE /api/assistant/documents/{id} — the server answers 2xx
+     * with no body the client needs; any 2xx counts as deleted. */
+    suspend fun deleteAssistantDocument(businessId: String, documentId: String): ApiResult<Unit> =
+        when (val result = request("DELETE", "/api/assistant/documents/${encode(documentId)}?businessId=${encode(businessId)}", requireAuth = true)) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            is ApiResult.HttpError -> result
+            is ApiResult.NetworkError -> result
+        }
+
 }

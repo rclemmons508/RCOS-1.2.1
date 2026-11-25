@@ -16,6 +16,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // LiveKit Android pulls its `audioswitch` fork from JitPack
+        // (com.github.davidliu:audioswitch) — Maven Central does not host it.
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
