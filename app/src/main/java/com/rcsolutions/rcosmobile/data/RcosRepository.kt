@@ -22,14 +22,18 @@ import com.rcsolutions.rcosmobile.model.ChatMessage
 import com.rcsolutions.rcosmobile.model.Customer
 import com.rcsolutions.rcosmobile.model.CustomerRequest
 import com.rcsolutions.rcosmobile.model.FieldTask
+import com.rcsolutions.rcosmobile.model.Invoice
 import com.rcsolutions.rcosmobile.model.Job
+import com.rcsolutions.rcosmobile.model.Quote
 import com.rcsolutions.rcosmobile.model.TeamMessage
+import com.rcsolutions.rcosmobile.model.UserProfile
 import com.rcsolutions.rcosmobile.model.VoicemailRecord
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -82,15 +86,30 @@ class RcosRepository(
         )
     }
 
-    fun observeBusinesses(uid: String): Flow<List<BusinessAccount>> =
-        observeMemberQuery(
+    // Live business docs written by the old app carry ownerId but no
+    // memberUids; new docs carry both. Query both ways and merge, so
+    // neither shape is missed. Rules allow list on a doc when the caller
+    // is its owner (ownerId) or a member (memberUids / memberEmails).
+    fun observeBusinesses(uid: String): Flow<List<BusinessAccount>> {
+        val sorter: (List<BusinessAccount>) -> List<BusinessAccount> = { list ->
+            list.sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
+        }
+        val owned = observeMemberQuery(
+            query = db.collection("businesses").whereEqualTo("ownerId", uid),
+            path = "businesses",
+            uid = uid,
+            clazz = BusinessAccount::class.java
+        )
+        val member = observeMemberQuery(
             query = db.collection("businesses").whereArrayContains("memberUids", uid),
             path = "businesses",
             uid = uid,
             clazz = BusinessAccount::class.java
-        ) { list ->
-            list.sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
+        )
+        return combine(owned, member) { ownedList, memberList ->
+            sorter((ownedList + memberList).distinctBy { it.id })
         }
+    }
 
     fun observeJobs(businessId: String, uid: String): Flow<List<Job>> =
         observeMemberQuery(
@@ -213,6 +232,28 @@ class RcosRepository(
             list.sortedByDescending { it.createdAt?.seconds ?: 0L }
         }
 
+    fun observeInvoices(businessId: String, uid: String): Flow<List<Invoice>> =
+        observeMemberQuery(
+            query = db.collection("businesses").document(businessId)
+                .collection("invoices").whereArrayContains("memberUids", uid),
+            path = "businesses/$businessId/invoices",
+            uid = uid,
+            clazz = Invoice::class.java
+        ) { list ->
+            list.sortedByDescending { it.createdAt?.seconds ?: 0L }
+        }
+
+    fun observeQuotes(businessId: String, uid: String): Flow<List<Quote>> =
+        observeMemberQuery(
+            query = db.collection("businesses").document(businessId)
+                .collection("quotes").whereArrayContains("memberUids", uid),
+            path = "businesses/$businessId/quotes",
+            uid = uid,
+            clazz = Quote::class.java
+        ) { list ->
+            list.sortedByDescending { it.createdAt?.seconds ?: 0L }
+        }
+
     // ---- Business Mutations ----
     suspend fun createBusiness(business: BusinessAccount): Result<String> {
         var path = "businesses"
@@ -269,7 +310,7 @@ class RcosRepository(
             val subCollections = listOf(
                 "requests", "actions", "jobs", "customers", "tasks",
                 "calls", "voicemails", "chatMessages", "teamMessages",
-                "agentMessages", "auditLogs"
+                "agentMessages", "auditLogs", "invoices", "quotes"
             )
             for (sub in subCollections) {
                 val docs = bizRef.collection(sub)
@@ -302,7 +343,7 @@ class RcosRepository(
             val ref = db.collection("businesses").document(business.id).collection("jobs").document()
             path = ref.path
             val bizOwner = business.ownerId.ifBlank { uid }
-            val members = business.memberUids.ifEmpty { listOf(uid) }
+            val members = (business.memberUids + uid).distinct().take(25)
             val payload = job.copy(businessId = business.id).toCreateMap(uid, bizOwner, members)
             ref.set(payload).await()
             Result.success(ref.id)
@@ -358,7 +399,7 @@ class RcosRepository(
             val payload = customer.copy(businessId = business.id).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(ref.id)
@@ -416,7 +457,7 @@ class RcosRepository(
             val payload = task.copy(businessId = business.id).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(ref.id)
@@ -474,7 +515,7 @@ class RcosRepository(
             val payload = call.copy(businessId = business.id).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(ref.id)
@@ -495,7 +536,7 @@ class RcosRepository(
             val payload = vm.copy(businessId = business.id).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(ref.id)
@@ -534,7 +575,7 @@ class RcosRepository(
             val payload = request.copy(businessId = business.id).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(ref.id)
@@ -556,7 +597,7 @@ class RcosRepository(
             val payload = action.copy(businessId = business.id).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(ref.id)
@@ -581,7 +622,7 @@ class RcosRepository(
             val uid = requireUserId()
             val ownerName = auth.currentUser?.displayName ?: auth.currentUser?.email ?: "Owner"
             val bizOwner = business.ownerId.ifBlank { uid }
-            val members = business.memberUids.ifEmpty { listOf(uid) }
+            val members = (business.memberUids + uid).distinct().take(25)
             val todayIso = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
             db.runTransaction { tx ->
@@ -660,6 +701,161 @@ class RcosRepository(
         }
     }
 
+    // ---- Per-user profile (top-level /users/{uid}) ----
+    // Phone + contact email live here, per person. Rules allow a user to
+    // read/write only their own doc.
+    suspend fun getUserProfile(uid: String): UserProfile? {
+        val current = requireUserId()
+        require(current == uid) { "A user can only load their own profile." }
+        val snap = db.collection("users").document(uid).get().await()
+        return snap.toObject(UserProfile::class.java)
+    }
+
+    suspend fun saveUserProfile(profile: UserProfile): Result<Unit> {
+        return try {
+            val uid = requireUserId()
+            require(profile.uid.isBlank() || profile.uid == uid) {
+                "A user can only save their own profile."
+            }
+            val ref = db.collection("users").document(uid)
+            if (ref.get().await().exists()) {
+                ref.update(profile.copy(uid = uid).toUpdateMap()).await()
+            } else {
+                ref.set(profile.copy(uid = uid).toCreateMap(uid, auth.currentUser?.email)).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "users")
+            Result.failure(e)
+        }
+    }
+
+    // ---- Invoices & Quotes (money loop: Quote -> Job -> Invoice -> Paid) ----
+    suspend fun createInvoice(business: BusinessAccount, invoice: Invoice): Result<String> {
+        var path = "businesses/${business.id}/invoices"
+        return try {
+            val uid = requireUserId()
+            require(invoice.title.trim().isNotEmpty()) { "Invoice title is required." }
+            require(invoice.clientName.trim().isNotEmpty()) { "Customer name is required." }
+            val ref = db.collection("businesses").document(business.id).collection("invoices").document()
+            path = ref.path
+            val payload = invoice.copy(businessId = business.id).toCreateMap(
+                uid,
+                business.ownerId.ifBlank { uid },
+                (business.memberUids + uid).distinct().take(25)
+            )
+            ref.set(payload).await()
+            Result.success(ref.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateInvoiceStatus(businessId: String, invoiceId: String, status: String): Result<Unit> {
+        val path = "businesses/$businessId/invoices/$invoiceId"
+        return try {
+            requireUserId()
+            require(status in listOf("draft", "unpaid", "paid", "overdue", "cancelled")) {
+                "Unknown invoice status."
+            }
+            db.document(path).update(
+                mapOf(
+                    "status" to status,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteInvoice(businessId: String, invoiceId: String): Result<Unit> {
+        val path = "businesses/$businessId/invoices/$invoiceId"
+        return try {
+            requireUserId()
+            db.document(path).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createQuote(business: BusinessAccount, quote: Quote): Result<String> {
+        var path = "businesses/${business.id}/quotes"
+        return try {
+            val uid = requireUserId()
+            require(quote.title.trim().isNotEmpty()) { "Quote title is required." }
+            require(quote.clientName.trim().isNotEmpty()) { "Customer name is required." }
+            val ref = db.collection("businesses").document(business.id).collection("quotes").document()
+            path = ref.path
+            val payload = quote.copy(businessId = business.id).toCreateMap(
+                uid,
+                business.ownerId.ifBlank { uid },
+                (business.memberUids + uid).distinct().take(25)
+            )
+            ref.set(payload).await()
+            Result.success(ref.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateQuoteStatus(
+        businessId: String,
+        quoteId: String,
+        status: String,
+        jobId: String? = null
+    ): Result<Unit> {
+        val path = "businesses/$businessId/quotes/$quoteId"
+        return try {
+            requireUserId()
+            require(status in listOf("draft", "awaiting_approval", "approved", "rejected", "expired")) {
+                "Unknown quote status."
+            }
+            val updates = buildMap<String, Any> {
+                put("status", status)
+                if (jobId != null) put("jobId", jobId)
+                put("updatedAt", FieldValue.serverTimestamp())
+            }
+            db.document(path).update(updates).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteQuote(businessId: String, quoteId: String): Result<Unit> {
+        val path = "businesses/$businessId/quotes/$quoteId"
+        return try {
+            requireUserId()
+            db.document(path).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
     // ---- Messages ----
     suspend fun saveChatMessage(business: BusinessAccount, msg: ChatMessage): Result<Unit> {
         var path = "businesses/${business.id}/chatMessages"
@@ -671,7 +867,7 @@ class RcosRepository(
             val payload = msg.copy(businessId = business.id).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(Unit)
@@ -700,7 +896,7 @@ class RcosRepository(
             ).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(Unit)
@@ -721,7 +917,7 @@ class RcosRepository(
             val payload = msg.copy(businessId = business.id).toCreateMap(
                 uid,
                 business.ownerId.ifBlank { uid },
-                business.memberUids.ifEmpty { listOf(uid) }
+                (business.memberUids + uid).distinct().take(25)
             )
             ref.set(payload).await()
             Result.success(Unit)

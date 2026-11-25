@@ -10,6 +10,8 @@ let testEnv;
 const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
 const ALICE_UID = "alice_owner_1";
 const BOB_UID = "bob_intruder_2";
+const CAROL_UID = "carol_member_3";
+const CAROL_EMAIL = "carol@example.com";
 const BIZ_ID = "biz_rc_1";
 
 const [emulatorHost, emulatorPortStr] = (process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":");
@@ -28,6 +30,32 @@ async function seedBusinessForAlice() {
       name: "RC Solutions",
       industry: "general_small_business",
       services: ["Service Call", "Site Estimate"],
+      autonomyMode: "supervised",
+      answeringMode: "ai",
+      aiReceptionistEnabled: true,
+      dollarThreshold: 250.0,
+      onboardingCompleted: true,
+      subscriptionTier: "Pro Plan",
+      createdAt: pastDate(20000),
+      updatedAt: pastDate(20000),
+    });
+  });
+}
+
+async function seedLiveBusinessForAlice() {
+  // Live-schema business (old app / biz_1794932142514 shape): ownerId +
+  // members roster + memberEmails + documentContactInfo, NO memberUids,
+  // NO top-level contactEmail. Seeded with rules disabled.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("businesses").doc(BIZ_ID).set({
+      ownerId: ALICE_UID,
+      members: [{ userId: "alice_local_1", email: "alice@example.com", name: "Alice", role: "owner" }],
+      memberEmails: { "alice@example.com": "owner", "carol@example.com": "member" },
+      documentContactInfo: { email: "alice@example.com", phone: "(470) 713-6068" },
+      name: "RC Solutions",
+      industry: "general_small_business",
+      services: ["Service Call"],
       autonomyMode: "supervised",
       answeringMode: "ai",
       aiReceptionistEnabled: true,
@@ -239,4 +267,107 @@ test("Kotlin-aligned queries & CRUD for jobs, customers, tasks, calls, actions, 
     summary: "Approved: Quote: Johnson Residence",
     createdAt: ts,
   }));
+});
+
+test("Phase 1: live-schema business (ownerId + members, no memberUids) is readable by its owner", async () => {
+  await seedLiveBusinessForAlice();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice@example.com", email_verified: true }).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+
+  await assertSucceeds(aliceDb.collection("businesses").doc(BIZ_ID).get());
+  await assertSucceeds(aliceDb.collection("businesses").where("ownerId", "==", ALICE_UID).get());
+  await assertFails(bobDb.collection("businesses").doc(BIZ_ID).get());
+
+  // Owner can update company contact fields on the legacy-shaped doc.
+  await assertSucceeds(
+    aliceDb.collection("businesses").doc(BIZ_ID).update({ contactPhone: "(470) 713-6068", updatedAt: pastDate(1000) })
+  );
+  // A stranger cannot.
+  await assertFails(
+    bobDb.collection("businesses").doc(BIZ_ID).update({ contactPhone: "000", updatedAt: pastDate(500) })
+  );
+});
+
+test("Phase 1: member via memberEmails can read the business; profiles are per-user only", async () => {
+  await seedLiveBusinessForAlice();
+  const carolDb = testEnv.authenticatedContext(CAROL_UID, { email: CAROL_EMAIL, email_verified: true }).firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+
+  await assertSucceeds(carolDb.collection("businesses").doc(BIZ_ID).get());
+
+  // Per-user profiles: own doc only.
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).set({
+      uid: ALICE_UID,
+      displayName: "Alice",
+      phone: "(470) 713-6068",
+      contactEmail: "alice@example.com",
+      createdAt: pastDate(8000),
+      updatedAt: pastDate(8000),
+    })
+  );
+  await assertSucceeds(aliceDb.collection("users").doc(ALICE_UID).get());
+  await assertFails(carolDb.collection("users").doc(ALICE_UID).get());
+  await assertFails(
+    carolDb.collection("users").doc(ALICE_UID).set({
+      uid: ALICE_UID,
+      displayName: "Hijacked",
+      createdAt: pastDate(8000),
+      updatedAt: pastDate(8000),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(CAROL_UID).set({
+      uid: CAROL_UID,
+      displayName: "Hijacked",
+      createdAt: pastDate(8000),
+      updatedAt: pastDate(8000),
+    })
+  );
+});
+
+test("Phase 1: invoices & quotes CRUD for members, owner-only delete", async () => {
+  await seedBusinessForAlice();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const ts = pastDate(8000);
+  const invoice = {
+    businessId: BIZ_ID,
+    ownerId: ALICE_UID,
+    memberUids: [ALICE_UID],
+    title: "Invoice: Johnson Residence",
+    clientName: "Johnson Residence",
+    amount: 420.0,
+    status: "unpaid",
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  const quote = {
+    businessId: BIZ_ID,
+    ownerId: ALICE_UID,
+    memberUids: [ALICE_UID],
+    title: "Quote: Johnson Residence",
+    clientName: "Johnson Residence",
+    amount: 420.0,
+    status: "awaiting_approval",
+    createdAt: ts,
+    updatedAt: ts,
+  };
+
+  await assertSucceeds(aliceDb.collection("businesses").doc(BIZ_ID).collection("invoices").doc("inv_1").set(invoice));
+  await assertSucceeds(aliceDb.collection("businesses").doc(BIZ_ID).collection("quotes").doc("q_1").set(quote));
+  await assertSucceeds(
+    aliceDb.collection("businesses").doc(BIZ_ID).collection("invoices").where("memberUids", "array-contains", ALICE_UID).get()
+  );
+  await assertSucceeds(
+    aliceDb.collection("businesses").doc(BIZ_ID).collection("invoices").doc("inv_1").update({ status: "paid", updatedAt: pastDate(1000) })
+  );
+  await assertSucceeds(
+    aliceDb.collection("businesses").doc(BIZ_ID).collection("quotes").doc("q_1").update({ status: "approved", jobId: "job_1", updatedAt: pastDate(1000) })
+  );
+  await assertFails(bobDb.collection("businesses").doc(BIZ_ID).collection("invoices").doc("inv_1").get());
+  await assertFails(
+    bobDb.collection("businesses").doc(BIZ_ID).collection("invoices").doc("inv_1").update({ status: "paid", updatedAt: pastDate(500) })
+  );
+  await assertFails(bobDb.collection("businesses").doc(BIZ_ID).collection("invoices").doc("inv_1").delete());
 });

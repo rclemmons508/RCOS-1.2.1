@@ -11,6 +11,22 @@ Native **Android** application built with **Kotlin**, **Jetpack Compose**, and *
 - **AI Assistant:** Firebase AI Logic (`Firebase.ai`, `gemini-3.8-flash` and `gemini-3.5-flash-lite`; Gemini Live audio via `gemini-3.8-live`) protected by Firebase App Check (`DebugAppCheckProviderFactory` in debug builds, `RecaptchaAppCheckProviderFactory` in release builds).
 - **Local Preferences:** Jetpack DataStore Preferences (`rcos_preferences`).
 
+## Phase 1 — Auth, business & Firestore security
+
+- **Sign-in:** Google Sign-In only. Fresh installs always start at the login gate (`AuthScreen`); there is no demo login, no bypass, and no pre-filled account. A signed-in session persists across restarts (normal Firebase Auth), and sign-out clears credentials and the active business.
+- **Business lookup:** the app finds a user's businesses two ways — `ownerId == uid` and `memberUids array-contains uid` — and merges them. This matters because the live business `biz_1794932142514` was written by the old app with `ownerId` + a `members` roster + `memberEmails` and **no `memberUids`**; a `memberUids`-only lookup returns nothing for it. New businesses created by onboarding write **both** shapes (`memberUids` + `members[]` + `memberEmails` + `documentContactInfo`), so the old app, the server, and this app can all read the same business.
+- **Membership (firestore.rules):** a caller is a member of a business if ANY of these hold — Firebase UID == `ownerId`, UID in `memberUids`, or verified Google email in `memberEmails` / `contactEmail` / `ownerEmail`. Only owners can update or delete the business doc, and company contact fields (`contactName` / `contactPhone` / `contactEmail` / `ownerEmail`) are owner-only for that reason. Rules tests in `firestore.test.js` cover the live-schema business, member-via-email, and cross-user isolation.
+- **Per-user profiles:** phone + contact email live on the per-person record `users/{uid}` (`UserProfile`), readable/writable only by that user. A member saving their own profile can never overwrite company contact info. Onboarding creates the profile for the new owner automatically.
+- **Job categories follow the business:** `MainViewModel.jobCategories` is the business's own services first, then its industry preset's defaults — never a hardcoded trade list. A business with no services and no preset gets an honestly empty list.
+- **Invoices & Quotes:** `businesses/{businessId}/invoices` and `/quotes` (money loop: Quote → Job → Invoice → Paid, no Stripe — status only). Members can create and update status; only the owner can delete.
+- **Empty states are real:** the live business currently has no jobs or customers in Firestore, so Jobs/Customers show honest empty states with a first action — no seed or demo data anywhere in the app. (The word "seed" appears only in `firestore.test.js`, which seeds the local emulator for rules tests.)
+
+### Known limits (Phase 1, not yet fixed)
+- A non-owner member can read the business doc and write docs they create (their UID is stamped into `memberUids` on create), but they do **not** see other members' subcollection docs in list queries — those queries filter by `memberUids`, and the old app's jobs carry no `memberUids`. The owner sees everything.
+- Legacy subcollection docs written by the old app (no `memberUids`) cannot be updated through the 1.2.1 rules validators, which require it. There are currently no such docs under the live business.
+- Gemini Live fallback `gemini-3.1-flash-live-preview` in `LiveVoiceManager` is unverified (primary `gemini-3.8-live` is verified); it is only tried after three failed attempts on the primary, and a failure surfaces honestly.
+
+
 ## Screens
 
 1. **Welcome & Google Sign-In:** Branded hero entry and Credential Manager authentication (fresh installs always start at the login gate).
