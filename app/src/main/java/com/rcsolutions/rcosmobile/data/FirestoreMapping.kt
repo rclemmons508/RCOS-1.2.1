@@ -25,6 +25,13 @@ import java.util.TimeZone
 // the old app writes (optional fraction, Z or numeric offset).
 private val LEGACY_TIMESTAMP_FIELDS = setOf("createdAt", "updatedAt")
 
+// Every Firestore model declares its id as @DocumentId (all 15 are named
+// `id`). The value always comes from the document reference, never from the
+// data — but legacy docs may also store an `id` field in their data (the
+// old business doc biz_1794092161535 does), and the mapper throws when the
+// data contains that key. Dropping it is lossless.
+private val DOCUMENT_ID_FIELDS = setOf("id")
+
 private val ISO_8601_REGEX =
     Regex("""^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$""")
 
@@ -77,10 +84,11 @@ fun parseLegacyTimestamp(raw: Any?): Timestamp? {
 
 /**
  * Same deserialization as DocumentSnapshot.toObject(..., ESTIMATE), but
- * first rewrites ISO-string createdAt/updatedAt values to real Timestamps.
- * Reads only — nothing here writes to Firestore, and writes elsewhere in
- * the repo still use FieldValue.serverTimestamp() (the published rules
- * require real timestamps on create).
+ * first rewrites ISO-string createdAt/updatedAt values to real Timestamps,
+ * and drops any stored `id` key (see DOCUMENT_ID_FIELDS). Reads only —
+ * nothing here writes to Firestore, and writes elsewhere in the repo still
+ * use FieldValue.serverTimestamp() (the published rules require real
+ * timestamps on create).
  */
 fun <T> DocumentSnapshot.toModel(clazz: Class<T>): T? {
     val data = getData(DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
@@ -89,6 +97,9 @@ fun <T> DocumentSnapshot.toModel(clazz: Class<T>): T? {
         if (data.containsKey(key)) {
             data[key] = parseLegacyTimestamp(data[key])
         }
+    }
+    for (key in DOCUMENT_ID_FIELDS) {
+        data.remove(key)
     }
     return CustomClassMapper.convertToCustomClass(data, clazz, this.reference)
 }
