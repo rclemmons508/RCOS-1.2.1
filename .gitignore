@@ -30,3 +30,7 @@ data/*.tmp
 # the Firebase console; placed in app/ by hand and must never be committed.
 app/google-services.json
 android/app/google-services.json
+
+# Stable debug keystore (restored in CI from the DEBUG_KEYSTORE_BASE64
+# secret; see README). The keystore itself must never be committed.
+debug.keystore
