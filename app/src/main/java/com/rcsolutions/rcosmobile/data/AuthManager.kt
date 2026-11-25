@@ -20,14 +20,22 @@ import com.google.firebase.auth.auth
 import com.rcsolutions.rcosmobile.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 private const val TAG = "Auth"
+
+// Login fix (Nov 25): the longest a single Google sign-in attempt may run.
+// A hung Credential Manager / Firebase call used to leave the login screen
+// stuck with no error at all after the account was picked. The attempt is
+// now bounded so a hang always surfaces as an error instead.
+private const val SIGN_IN_TIMEOUT_MS = 25_000L
 
 fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -104,22 +112,35 @@ fun onGoogleSignInClicked(
 
     scope.launch {
         try {
-            val cred = credentialManager.getCredential(activity, request).credential
-            if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
-                onAuthSuccess()
-            } else {
-                onAuthError("Unexpected credential type returned by Google Sign-In.")
+            withTimeout(SIGN_IN_TIMEOUT_MS) {
+                val cred = credentialManager.getCredential(activity, request).credential
+                if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
+                    Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                    onAuthSuccess()
+                } else {
+                    onAuthError("Unexpected credential type returned by Google Sign-In.")
+                }
             }
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Google Sign-In timed out after ${SIGN_IN_TIMEOUT_MS / 1000} seconds", e)
+            onAuthError("Sign-in timed out. Check your connection and try again — if it keeps timing out, the app build may need its sign-in key re-registered (see README).")
         } catch (e: GetCredentialCancellationException) {
             Log.w(TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
             onAuthCancelled()
         } catch (e: Exception) {
             Log.e(TAG, "Google Sign-In failed", e)
-            onAuthError(e.localizedMessage ?: "Google Sign-In failed.")
+            onAuthError(signInErrorMessage(e))
         }
     }
+}
+
+// Never surface a blank error on the login screen: fall back to the
+// exception type so the message is always non-blank and actionable.
+private fun signInErrorMessage(e: Exception): String {
+    val detail = e.localizedMessage?.takeIf { it.isNotBlank() }
+    return if (detail != null) "Google Sign-In failed: $detail"
+    else "Google Sign-In failed (${e::class.simpleName ?: "unknown error"}). Please try again."
 }
 
 fun signOut(
