@@ -8,6 +8,7 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.firestoreSettings
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.snapshots
@@ -46,6 +47,17 @@ class RcosRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth
 ) {
+    init {
+        // Phase 2 - Firestore on Android persists to disk by default;
+        // make the offline cache explicit so offline behavior never
+        // depends on an implicit default. Settings must be set before
+        // first use; a second repository instance (process recreation)
+        // leaves them untouched instead of crashing.
+        runCatching {
+            db.firestoreSettings = firestoreSettings { isPersistenceEnabled = true }
+        }
+    }
+
     constructor(context: Context) : this(
         FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)

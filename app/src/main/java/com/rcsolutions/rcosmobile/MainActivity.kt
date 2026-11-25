@@ -74,8 +74,10 @@ import androidx.navigation.compose.rememberNavController
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.rcsolutions.rcosmobile.data.AiRepository
+import com.rcsolutions.rcosmobile.data.ConnectivityMonitor
 import com.rcsolutions.rcosmobile.data.LiveVoiceManager
 import com.rcsolutions.rcosmobile.data.RcosRepository
+import com.rcsolutions.rcosmobile.data.ServerApiClient
 import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
 import com.rcsolutions.rcosmobile.data.WeatherService
 import com.rcsolutions.rcosmobile.data.attemptAutoSignIn
@@ -191,6 +193,8 @@ private fun RcosAppRoot() {
                             aiRepo = AiRepository(),
                             liveVoiceManager = LiveVoiceManager(),
                             weatherService = WeatherService(),
+                            serverApi = ServerApiClient(),
+                            connectivityMonitor = ConnectivityMonitor(appContext),
                             currentUserId = uid,
                             currentUserEmail = user.email.orEmpty(),
                             currentUserName = user.displayName.orEmpty()

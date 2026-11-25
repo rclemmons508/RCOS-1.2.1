@@ -6,6 +6,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.rcsolutions.rcosmobile.data.AiRepository
+import com.rcsolutions.rcosmobile.data.ApiResult
+import com.rcsolutions.rcosmobile.data.ChatReply
+import com.rcsolutions.rcosmobile.data.ConnectionState
+import com.rcsolutions.rcosmobile.data.ConnectivityMonitor
+import com.rcsolutions.rcosmobile.data.DiagnosticsScan
+import com.rcsolutions.rcosmobile.data.GmailConnection
+import com.rcsolutions.rcosmobile.data.GmailOAuthStart
+import com.rcsolutions.rcosmobile.data.ServerApiClient
+import com.rcsolutions.rcosmobile.data.ServerStatus
 import com.rcsolutions.rcosmobile.data.LiveVoiceManager
 import com.rcsolutions.rcosmobile.data.MODEL_GEMINI_LIVE
 import com.rcsolutions.rcosmobile.data.MODEL_GENERAL
@@ -88,6 +97,8 @@ class MainViewModel(
     private val aiRepo: AiRepository,
     private val liveVoiceManager: LiveVoiceManager,
     private val weatherService: WeatherService,
+    private val serverApi: ServerApiClient = ServerApiClient(),
+    private val connectivityMonitor: ConnectivityMonitor? = null,
     val currentUserId: String,
     val currentUserEmail: String,
     val currentUserName: String,
@@ -290,6 +301,159 @@ class MainViewModel(
     private val _operationalSyncError = MutableStateFlow<String?>(null)
     val operationalSyncError: StateFlow<String?> = _operationalSyncError.asStateFlow()
 
+    // ---- Phase 2 - Railway server connection ----
+    // Real connectivity from the device (never a fixed ONLINE label).
+    val connectionState: StateFlow<ConnectionState> =
+        connectivityMonitor?.state ?: MutableStateFlow(ConnectionState.UNKNOWN).asStateFlow()
+
+    private val _serverStatus = MutableStateFlow(ServerStatus())
+    val serverStatus: StateFlow<ServerStatus> = _serverStatus.asStateFlow()
+
+    private val _diagnosticsState = MutableStateFlow<UiState<DiagnosticsScan>?>(null)
+    val diagnosticsState: StateFlow<UiState<DiagnosticsScan>?> = _diagnosticsState.asStateFlow()
+
+    private val _gmailConnection = MutableStateFlow<GmailConnection>(GmailConnection.Unknown)
+    val gmailConnection: StateFlow<GmailConnection> = _gmailConnection.asStateFlow()
+
+    private val _gmailOAuthStart = MutableStateFlow<GmailOAuthStart?>(null)
+    val gmailOAuthStart: StateFlow<GmailOAuthStart?> = _gmailOAuthStart.asStateFlow()
+
+    private val _serverChatState = MutableStateFlow<UiState<ChatReply>?>(null)
+    val serverChatState: StateFlow<UiState<ChatReply>?> = _serverChatState.asStateFlow()
+
+    /** Probe the live server (public health check - no token needed).
+     * Any HTTP answer proves the server is reachable; only a network
+     * failure or a missing network means it is not. Never fakes success. */
+    fun refreshServerStatus() {
+        viewModelScope.launch {
+            if (connectionState.value == ConnectionState.OFFLINE) {
+                _serverStatus.value = ServerStatus(
+                    reachable = false,
+                    lastCheckedAtEpochMs = System.currentTimeMillis(),
+                    detail = "No network connection.",
+                )
+                return@launch
+            }
+            _serverStatus.value = when (val result = serverApi.getHealth()) {
+                is ApiResult.Success -> ServerStatus(
+                    reachable = true,
+                    lastCheckedAtEpochMs = System.currentTimeMillis(),
+                    detail = "Server responding (${result.data.status}).",
+                )
+                is ApiResult.HttpError -> ServerStatus(
+                    reachable = true,
+                    lastCheckedAtEpochMs = System.currentTimeMillis(),
+                    detail = "Server reachable, answered HTTP ${result.status}.",
+                )
+                is ApiResult.NetworkError -> ServerStatus(
+                    reachable = false,
+                    lastCheckedAtEpochMs = System.currentTimeMillis(),
+                    detail = result.message,
+                )
+            }
+        }
+    }
+
+    /** Run the server diagnostics scan (signed-in users only - the
+     * server answers 401 when unsigned). */
+    fun runDiagnostics() {
+        viewModelScope.launch {
+            _diagnosticsState.value = UiState.Loading
+            _diagnosticsState.value = when (val result = serverApi.getDiagnostics()) {
+                is ApiResult.Success -> UiState.Success(result.data)
+                is ApiResult.HttpError -> UiState.Error(
+                    if (result.status == 401) "Please sign in again to run diagnostics."
+                    else result.message
+                )
+                is ApiResult.NetworkError -> UiState.Error(
+                    "Server unreachable - check your connection and try again."
+                )
+            }
+        }
+    }
+
+    /** Check whether the signed-in user has Gmail connected (their own
+     * token only). 404 means not connected - a normal state, not an error. */
+    fun checkGmailConnection() {
+        val biz = activeBusiness.value ?: return
+        viewModelScope.launch {
+            when (val result = serverApi.getGmailToken(biz.id)) {
+                is ApiResult.Success -> _gmailConnection.value = GmailConnection.Connected(result.data.email)
+                is ApiResult.HttpError -> {
+                    if (result.status == 404) {
+                        _gmailConnection.value = GmailConnection.NotConnected
+                    } else {
+                        _gmailConnection.value = GmailConnection.Unknown
+                        _bannerMessage.value = result.message
+                    }
+                }
+                is ApiResult.NetworkError -> {
+                    _gmailConnection.value = GmailConnection.Unknown
+                    _bannerMessage.value = "Could not check Gmail - server unreachable."
+                }
+            }
+        }
+    }
+
+    /** Start Gmail OAuth (Phase 6 opens the returned URL in the system
+     * browser). The result is exposed via [gmailOAuthStart]. */
+    fun startGmailOAuth() {
+        val biz = activeBusiness.value ?: run {
+            _bannerMessage.value = "Complete workspace setup first to connect Gmail."
+            return
+        }
+        viewModelScope.launch {
+            when (val result = serverApi.startGmailOAuth(biz.id)) {
+                is ApiResult.Success -> _gmailOAuthStart.value = result.data
+                is ApiResult.HttpError -> _bannerMessage.value = result.message
+                is ApiResult.NetworkError -> _bannerMessage.value = "Could not start Gmail sign-in - server unreachable."
+            }
+        }
+    }
+
+    /**
+     * POST /api/chat transport only (Phase 3 wires the Assistant UI).
+     * Sends the given chat history to the server and exposes the real
+     * reply - or the server's honest fallback - via [serverChatState].
+     */
+    fun sendChatViaServer(
+        messages: List<ChatMessage>,
+        roleId: String = "executive_assistant",
+        modelTier: String = "general",
+    ) {
+        val biz = activeBusiness.value ?: run {
+            _serverChatState.value = UiState.Error("Complete workspace setup first to chat with the server.")
+            return
+        }
+        if (messages.isEmpty()) {
+            _serverChatState.value = UiState.Error("Nothing to send yet.")
+            return
+        }
+        viewModelScope.launch {
+            _serverChatState.value = UiState.Loading
+            _serverChatState.value = when (val result = serverApi.postChat(messages, roleId, modelTier, biz.id)) {
+                is ApiResult.Success -> {
+                    if (result.data.isFallback) {
+                        Log.w(TAG, "Server chat answered with its offline fallback (modelUsed=rcos-offline-engine).")
+                    }
+                    UiState.Success(result.data)
+                }
+                is ApiResult.HttpError -> UiState.Error(result.message)
+                is ApiResult.NetworkError -> UiState.Error("Server unreachable - check your connection and try again.")
+            }
+        }
+    }
+
+    /** Single entry point for pull-to-refresh gestures: reload Firestore
+     * data (offline cache first) and re-probe the live server. Screen
+     * gesture wiring lands with the Phase 3 UI work; the backing is
+     * ready now. */
+    fun refreshServerAndData() {
+        retryLoadWorkspaces()
+        refreshUserProfile()
+        refreshServerStatus()
+    }
+
     private val _isWeeklyTrendsRefreshing = MutableStateFlow(false)
     val isWeeklyTrendsRefreshing: StateFlow<Boolean> = _isWeeklyTrendsRefreshing.asStateFlow()
 
@@ -309,6 +473,27 @@ class MainViewModel(
                 prefs.weatherCity.ifBlank { biz?.serviceArea.orEmpty() }
             }.distinctUntilChanged().collect { city ->
                 _weatherState.value = if (city.isNotBlank()) weatherService.fetchCurrentWeather(city) else null
+            }
+        }
+        // Phase 2 - server status probe at start, and a real offline
+        // signal: going offline posts the existing banner once (the
+        // app keeps showing cached Firestore data); coming back online
+        // re-probes the server automatically.
+        refreshServerStatus()
+        viewModelScope.launch {
+            var wasOnline: Boolean? = null
+            connectionState.collect { state ->
+                val online = state == ConnectionState.ONLINE
+                if (wasOnline == true && !online) {
+                    _serverStatus.value = _serverStatus.value.copy(
+                        reachable = false,
+                        detail = "No network connection - showing your saved data.",
+                    )
+                    _bannerMessage.value = "You're offline - showing your saved data. Changes will sync when you're back online."
+                } else if (wasOnline == false && online) {
+                    refreshServerStatus()
+                }
+                wasOnline = online
             }
         }
     }
