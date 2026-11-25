@@ -5,6 +5,13 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
+// Phase 2 - Railway server base URL. Override with the `rcosApiBaseUrl`
+// Gradle property (`-PrcosApiBaseUrl=...` or `local.properties`).
+// This is a public base URL, not a secret.
+val rcosApiBaseUrl = (project.findProperty("rcosApiBaseUrl") as? String)
+    ?.trim()?.takeIf { it.isNotEmpty() }
+    ?: "https://rcos-mobile-app-production.up.railway.app"
+
 android {
     namespace = "com.rcsolutions.rcosmobile"
     compileSdk = 36
@@ -17,6 +24,9 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Phase 2 - Railway server base URL for ServerApiClient.
+        buildConfigField("String", "RCOS_API_BASE_URL", "\"$rcosApiBaseUrl\"")
     }
 
     signingConfigs {
