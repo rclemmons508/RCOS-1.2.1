@@ -90,7 +90,7 @@ fun <T> DocumentSnapshot.toModel(clazz: Class<T>): T? {
             data[key] = parseLegacyTimestamp(data[key])
         }
     }
-    return CustomClassMapper.convertToCustomClass(data, clazz, this)
+    return CustomClassMapper.convertToCustomClass(data, clazz, this.reference)
 }
 
 /** Query-wide version of [DocumentSnapshot.toModel]. */

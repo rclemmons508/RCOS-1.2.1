@@ -129,3 +129,4 @@ FIRESTORE_EMULATOR_HOST="127.0.0.1:8085" node --test firestore.test.js
 ### Phone test (hotfix, after merge + install of the main APK)
 1. Sign in → the workspace loads RC Solutions (no more deserialize error) → Jobs and Customers show honest empty states.
 2. Sign out and back in → the workspace still loads (the string timestamps parse the same way every time).
+- **Follow-up fix (PR #6):** Build APK run #13 failed only on a compile error at `FirestoreMapping.kt:93` — `CustomClassMapper.convertToCustomClass` expects a `DocumentReference` as its third argument, not the `DocumentSnapshot`; one-line fix: `this` → `this.reference`.
