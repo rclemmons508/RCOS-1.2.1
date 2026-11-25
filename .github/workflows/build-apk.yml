@@ -64,16 +64,23 @@ jobs:
         # registered in Firebase — Google Sign-In rejected the caller and
         # the login screen hung with no error after picking an account.
         # The keystore is now stable: one keystore, stored as the
-        # DEBUG_KEYSTORE_BASE64 repo secret, restored on every run. Its
-        # SHA-1 must be registered in Firebase Console > Project settings >
-        # Android app > SHA certificate fingerprints (see README).
+        # DEBUG_KEYSTORE_HEX repo secret (hex — base64 kept getting
+        # corrupted in transit), restored on every run. Its SHA-1 must be
+        # registered in Firebase Console > Project settings > Android app >
+        # SHA certificate fingerprints (see README).
         # Never commit debug.keystore to the repo.
         run: |
-          if [ -z "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
-            echo "::error::Missing secret DEBUG_KEYSTORE_BASE64. Add it in GitHub > Settings > Secrets and variables > Actions, as base64 of the stable debug.keystore (see README). Do NOT commit debug.keystore to the repo."
+          if [ -z "${{ secrets.DEBUG_KEYSTORE_HEX }}" ]; then
+            echo "::error::Missing secret DEBUG_KEYSTORE_HEX. Add it in GitHub > Settings > Secrets and variables > Actions, as hex of the stable debug.keystore (see README). Do NOT commit debug.keystore to the repo."
             exit 1
           fi
-          echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > debug.keystore
+          HEX="${{ secrets.DEBUG_KEYSTORE_HEX }}"
+          if [ "${#HEX}" -ne 5332 ]; then
+            echo "::error::DEBUG_KEYSTORE_HEX has ${#HEX} characters, expected 5332 — the secret value is corrupted. Re-enter it."
+            exit 1
+          fi
+          echo "$HEX" | python3 -c "import sys; sys.stdout.buffer.write(bytes.fromhex(sys.stdin.read().strip()))" > debug.keystore
+          keytool -list -v -keystore debug.keystore -storepass android 2>/dev/null | grep -qi "SHA1: A1:45:78:62:94:CF:2A:BF:95:87:6B:06:E5:66:80:6E:13:B1:EB:FA" || { echo "::error::Restored keystore SHA-1 does not match the registered fingerprint — the secret value is corrupted."; exit 1; }
           ls -l debug.keystore
 
       - name: Set up Gradle 9.3.1
