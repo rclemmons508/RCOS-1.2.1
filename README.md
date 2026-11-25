@@ -65,6 +65,16 @@ Auth on every gated call is the signed-in user's Firebase ID token (`Authorizati
 4. Pull to refresh (or use the retry action) → data reloads and the server status refreshes; if the server is unreachable you get a clear error, never a fake success.
 
 
+## Login fix — stable debug keystore (Nov 25)
+
+**What broke:** every APK built by the Build APK workflow was signed with a brand-new debug keystore generated on the runner, so its SHA-1 was never registered in Firebase. Google Sign-In rejected the unregistered caller: after picking a Google account the login screen just stayed put with no error, on every CI-built APK.
+
+**The fix:**
+- One stable debug keystore is now used for every build. The workflow restores it from the `DEBUG_KEYSTORE_BASE64` repository secret (base64 of the keystore file) instead of generating a fresh one. The keystore itself is never committed (`debug.keystore` is gitignored); it uses the standard debug values — store password `android`, alias `androiddebugkey`, key password `android` — so no extra secrets are needed.
+- Its SHA-1 fingerprint is `A1:45:78:62:94:CF:2A:BF:95:87:6B:06:E5:66:80:6E:13:B1:EB:FA` (SHA-256 `12:71:32:EB:01:9E:EF:DE:37:D3:F4:0C:57:02:D7:98:C8:E1:2C:70:77:FD:76:8B:85:91:10:8F:21:70:83:6A`). **That SHA-1 must be registered in Firebase Console → Project settings → the Android app (`com.rcsolutions.rcosmobile`) → SHA certificate fingerprints → Add fingerprint.** Until it is registered, CI-built APKs still cannot sign in — the only fingerprint registered before this fix (`99:b3:3d:da…`) belongs to a different keystore.
+- `onGoogleSignInClicked` (`data/AuthManager.kt`) now bounds sign-in to 25 seconds: a hung sign-in shows an error on the login screen instead of hanging silently, and the error message is never blank.
+- Rotating the keystore later means: generate a new one, replace the `DEBUG_KEYSTORE_BASE64` secret, and register the new SHA-1 in Firebase the same way.
+
 ## Screens
 
 1. **Welcome & Google Sign-In:** Branded hero entry and Credential Manager authentication (fresh installs always start at the login gate).
