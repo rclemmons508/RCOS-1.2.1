@@ -65,7 +65,7 @@ service cloud.firestore {
     function isMemberData(data) {
       return isSignedIn() && data != null && (
         isOwnerData(data)
-        || (data.memberUids is list && request.auth.uid in data.memberUids)
+        || (request.auth.uid in data.get('memberUids', []))
         || (callerEmail() != '' && data.get('memberEmails', {}) is map
           && data.get('memberEmails', {}).get(callerEmail(), null) != null)
       );
