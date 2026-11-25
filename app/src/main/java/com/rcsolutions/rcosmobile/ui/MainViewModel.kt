@@ -28,17 +28,20 @@ import com.rcsolutions.rcosmobile.model.ChatMessage
 import com.rcsolutions.rcosmobile.model.Customer
 import com.rcsolutions.rcosmobile.model.CustomerRequest
 import com.rcsolutions.rcosmobile.model.FieldTask
+import com.rcsolutions.rcosmobile.model.Invoice
 import com.rcsolutions.rcosmobile.model.Job
 import com.rcsolutions.rcosmobile.model.JobPriority
 import com.rcsolutions.rcosmobile.model.JobStatus
 import com.rcsolutions.rcosmobile.model.LiveVoiceStatus
 import com.rcsolutions.rcosmobile.model.LiveVoiceUiState
 import com.rcsolutions.rcosmobile.model.OnboardingExtraction
+import com.rcsolutions.rcosmobile.model.Quote
 import com.rcsolutions.rcosmobile.model.QuoteDraftSuggestion
 import com.rcsolutions.rcosmobile.model.TaskBucket
 import com.rcsolutions.rcosmobile.model.TaskCategory
 import com.rcsolutions.rcosmobile.model.TeamMessage
 import com.rcsolutions.rcosmobile.model.UiState
+import com.rcsolutions.rcosmobile.model.UserProfile
 import com.rcsolutions.rcosmobile.model.VoicemailRecord
 import com.rcsolutions.rcosmobile.model.WeatherSnapshot
 import kotlinx.coroutines.CancellationException
@@ -218,6 +221,49 @@ class MainViewModel(
         }
         .toUiStateFlow("Failed to load audit log")
 
+    val invoicesState: StateFlow<UiState<List<Invoice>>> = activeBusinessIdFlow
+        .flatMapLatest { bizId ->
+            if (bizId.isBlank()) flowOf(emptyList())
+            else repository.observeInvoices(bizId, currentUserId)
+        }
+        .toUiStateFlow("Failed to load invoices")
+
+    val quotesState: StateFlow<UiState<List<Quote>>> = activeBusinessIdFlow
+        .flatMapLatest { bizId ->
+            if (bizId.isBlank()) flowOf(emptyList())
+            else repository.observeQuotes(bizId, currentUserId)
+        }
+        .toUiStateFlow("Failed to load quotes")
+
+    // Job categories follow the business, never a hardcoded trade list:
+    // the business's own services first, then its industry preset's
+    // defaults. A business with no services and no preset gets an
+    // honestly empty list (never a generic trade list).
+    val jobCategories: StateFlow<List<String>> = activeBusiness
+        .map { biz ->
+            biz?.services?.ifEmpty {
+                RcosDefaults.findPreset(biz.industry).defaultServices
+            }.orEmpty()
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    // Per-user profile (/users/{uid}): phone + contact email for the
+    // signed-in person. Loaded once at start; absent until first save.
+    private val _userProfileState = MutableStateFlow<UiState<UserProfile?>>(UiState.Loading)
+    val userProfileState: StateFlow<UiState<UserProfile?>> = _userProfileState.asStateFlow()
+
+    fun refreshUserProfile() {
+        viewModelScope.launch {
+            _userProfileState.value = try {
+                UiState.Success(repository.getUserProfile(currentUserId))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                UiState.Error(e.localizedMessage ?: "Failed to load profile.")
+            }
+        }
+    }
+
     private val _weatherState = MutableStateFlow<WeatherSnapshot?>(null)
     val weatherState: StateFlow<WeatherSnapshot?> = _weatherState.asStateFlow()
 
@@ -257,6 +303,7 @@ class MainViewModel(
     val onboardingExtraction: StateFlow<UiState<OnboardingExtraction>?> = _onboardingExtraction.asStateFlow()
 
     init {
+        refreshUserProfile()
         viewModelScope.launch {
             combine(localPrefs, activeBusiness) { prefs, biz ->
                 prefs.weatherCity.ifBlank { biz?.serviceArea.orEmpty() }
@@ -404,6 +451,18 @@ class MainViewModel(
             repository.createBusiness(biz)
                 .onSuccess { newId ->
                     prefsRepo.setActiveBusinessId(newId)
+                    // Per-user profile: phone + contact email live on the
+                    // User record, never on the business doc. Best effort —
+                    // a profile-save failure must not fail the workspace.
+                    viewModelScope.launch {
+                        repository.saveUserProfile(
+                            UserProfile(
+                                displayName = currentUserName,
+                                contactEmail = currentUserEmail
+                            )
+                        )
+                        refreshUserProfile()
+                    }
                     if (serviceArea.isNotBlank()) prefsRepo.setWeatherCity(serviceArea)
                     _bannerMessage.value = "$cleanName workspace created."
                     onCreated()
@@ -456,6 +515,117 @@ class MainViewModel(
         val biz = activeBusiness.value ?: return
         val updated = biz.employeeTones.toMutableMap().apply { put(employeeId, tone) }
         updateBusinessProfile(mapOf("employeeTones" to updated), "Voice tone saved.")
+    }
+
+    // Per-user profile save. This writes ONLY /users/{uid} — it never
+    // touches the business doc, so a member can never overwrite company
+    // contact info by saving their own phone/email.
+    fun saveUserProfile(phone: String, contactEmail: String) {
+        viewModelScope.launch {
+            _isMutating.value = true
+            val current = (_userProfileState.value as? UiState.Success)?.data
+            repository.saveUserProfile(
+                UserProfile(
+                    displayName = currentUserName,
+                    phone = phone.trim(),
+                    contactEmail = contactEmail.trim(),
+                    businessIds = current?.businessIds.orEmpty()
+                )
+            ).onSuccess {
+                refreshUserProfile()
+                _bannerMessage.value = "Profile saved."
+            }.onFailure { e ->
+                _bannerMessage.value = e.localizedMessage ?: "Failed to save profile."
+            }
+            _isMutating.value = false
+        }
+    }
+
+    // Company contact details are owner-only. Rules enforce this too
+    // (business updates require the owner), but fail fast here with a
+    // plain message instead of a Firestore permission error.
+    fun updateBusinessContact(contactName: String, contactPhone: String, contactEmail: String) {
+        val biz = activeBusiness.value ?: return
+        if (biz.ownerId != currentUserId) {
+            _bannerMessage.value = "Only the business owner can change company contact details."
+            return
+        }
+        updateBusinessProfile(
+            mapOf(
+                "contactName" to contactName.trim(),
+                "contactPhone" to contactPhone.trim(),
+                "contactEmail" to contactEmail.trim()
+            ),
+            successMsg = "Company contact details updated."
+        )
+    }
+
+    // ---- Invoices & Quotes (money loop) ----
+    fun createInvoice(title: String, clientName: String, amount: Double, dueDate: String = "") {
+        val biz = activeBusiness.value ?: return
+        if (title.isBlank() || clientName.isBlank()) {
+            _bannerMessage.value = "Invoice title and customer name are required."
+            return
+        }
+        viewModelScope.launch {
+            repository.createInvoice(
+                biz,
+                Invoice(
+                    businessId = biz.id,
+                    title = title.trim(),
+                    clientName = clientName.trim(),
+                    amount = amount,
+                    status = "unpaid",
+                    dueDate = dueDate.trim()
+                )
+            ).onSuccess {
+                _bannerMessage.value = "Invoice created."
+            }.onFailure { e ->
+                _bannerMessage.value = e.localizedMessage ?: "Failed to create invoice."
+            }
+        }
+    }
+
+    fun updateInvoiceStatus(invoice: Invoice, status: String) {
+        val biz = activeBusiness.value ?: return
+        viewModelScope.launch {
+            repository.updateInvoiceStatus(biz.id, invoice.id, status)
+                .onSuccess { _bannerMessage.value = "Invoice marked $status." }
+                .onFailure { e -> _bannerMessage.value = e.localizedMessage ?: "Failed to update invoice." }
+        }
+    }
+
+    fun createQuote(title: String, clientName: String, amount: Double) {
+        val biz = activeBusiness.value ?: return
+        if (title.isBlank() || clientName.isBlank()) {
+            _bannerMessage.value = "Quote title and customer name are required."
+            return
+        }
+        viewModelScope.launch {
+            repository.createQuote(
+                biz,
+                Quote(
+                    businessId = biz.id,
+                    title = title.trim(),
+                    clientName = clientName.trim(),
+                    amount = amount,
+                    status = "draft"
+                )
+            ).onSuccess {
+                _bannerMessage.value = "Quote created."
+            }.onFailure { e ->
+                _bannerMessage.value = e.localizedMessage ?: "Failed to create quote."
+            }
+        }
+    }
+
+    fun updateQuoteStatus(quote: Quote, status: String) {
+        val biz = activeBusiness.value ?: return
+        viewModelScope.launch {
+            repository.updateQuoteStatus(biz.id, quote.id, status)
+                .onSuccess { _bannerMessage.value = "Quote $status." }
+                .onFailure { e -> _bannerMessage.value = e.localizedMessage ?: "Failed to update quote." }
+        }
     }
 
     fun deleteActiveWorkspace(onDeleted: () -> Unit) {

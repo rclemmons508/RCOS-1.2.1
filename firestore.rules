@@ -33,22 +33,58 @@ service cloud.firestore {
       return !(key in data) || (data[key] is list && data[key].size() <= maxLen && (data[key].size() == 0 || data[key][0] is string));
     }
 
-    function isMemberArray(data) {
-      return data != null &&
-        data.memberUids is list &&
-        data.memberUids.size() >= 1 &&
-        data.memberUids.size() <= 25 &&
-        request.auth.uid in data.memberUids;
+    // Verified email of the caller ('' when the token carries no email or
+    // it is not verified). Google sign-in tokens always carry a verified
+    // email. Mirrors RCOS-MOBILE-APP firestore.rules.
+    function callerEmail() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.get('email_verified', false) == true
+        ? request.auth.token.email.lower() : '';
     }
 
+    // Owner proof against a business document's data. Any ONE proves it:
+    // Firebase UID == ownerId, verified token email == contactEmail /
+    // ownerEmail, or verified email listed as 'owner' in memberEmails.
     function isOwnerData(data) {
-      return isSignedIn() && data != null && data.ownerId is string && data.ownerId == request.auth.uid;
+      return isSignedIn() && data != null && (
+        (data.get('ownerId', '') is string
+          && data.get('ownerId', '') != 'unassigned_owner'
+          && data.get('ownerId', '') == request.auth.uid)
+        || (callerEmail() != '' && data.get('contactEmail', '') is string
+          && data.get('contactEmail', '').lower() == callerEmail())
+        || (callerEmail() != '' && data.get('ownerEmail', '') is string
+          && data.get('ownerEmail', '').lower() == callerEmail())
+        || (data.get('memberEmails', {}) is map
+          && data.get('memberEmails', {}).get(callerEmail(), null) == 'owner')
+      );
+    }
+
+    // Member proof: the owner, a UID in the 1.2.1 memberUids list, or a
+    // verified email in the memberEmails map (the old app's roster shape).
+    function isMemberData(data) {
+      return isSignedIn() && data != null && (
+        isOwnerData(data)
+        || (data.memberUids is list && request.auth.uid in data.memberUids)
+        || (callerEmail() != '' && data.get('memberEmails', {}) is map
+          && data.get('memberEmails', {}).get(callerEmail(), null) != null)
+      );
+    }
+
+    // Membership check for a business or subcollection document. Accepts
+    // BOTH shapes: 1.2.1 docs (memberUids list) and live old-app docs
+    // (ownerId / members roster / memberEmails map, no memberUids).
+    // The live business biz_1794932142514 has ownerId + members +
+    // memberEmails and no memberUids — the old memberUids-only check
+    // locked its owner out. Do not re-tighten this to memberUids only.
+    function isMemberArray(data) {
+      return isMemberData(data);
     }
 
     function isParentMember(businessId) {
       return isValidId(businessId) &&
         exists(/databases/$(database)/documents/businesses/$(businessId)) &&
-        request.auth.uid in get(/databases/$(database)/documents/businesses/$(businessId)).data.memberUids;
+        isMemberData(get(/databases/$(database)/documents/businesses/$(businessId)).data);
     }
 
     function hasValidCommonSubdocFields(data, businessId) {
@@ -63,9 +99,11 @@ service cloud.firestore {
     function isValidBusiness(data) {
       return !('id' in data) &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
-        data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 25 &&
-        (data.memberUids[0] is string) &&
+        (!('memberUids' in data) || (data.memberUids is list && data.memberUids.size() <= 25 &&
+          (data.memberUids.size() == 0 || data.memberUids[0] is string))) &&
         (!('memberEmails' in data) || data.memberEmails is map) &&
+        (!('members' in data) || data.members is list) &&
+        (!('documentContactInfo' in data) || data.documentContactInfo is map) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
         data.industry is string && data.industry.size() >= 1 && data.industry.size() <= 60 &&
         isValidOptStr(data, 'size', 50) &&
@@ -261,9 +299,57 @@ service cloud.firestore {
         data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 500;
     }
 
+    // Per-user profile (top-level /users/{uid}). A user may only ever
+    // read/write their own doc. Phone + contact email live here — never
+    // on the business doc — so a member saving their profile can never
+    // overwrite company contact info.
+    function isValidUserProfile(data) {
+      return !('id' in data) &&
+        data.uid is string && data.uid == request.auth.uid &&
+        isValidOptStr(data, 'displayName', 100) &&
+        isValidOptStr(data, 'phone', 30) &&
+        isValidOptStr(data, 'contactEmail', 120) &&
+        (!('businessIds' in data) || (data.businessIds is list && data.businessIds.size() <= 25)) &&
+        data.createdAt is timestamp && data.createdAt <= request.time &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // Money loop: Quote -> Job -> Invoice -> Paid. No Stripe: invoices
+    // track Paid/Unpaid/Overdue status only.
+    function isValidInvoice(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.clientName is string && data.clientName.size() >= 1 && data.clientName.size() <= 100 &&
+        isValidOptStr(data, 'clientId', 128) &&
+        isValidOptStr(data, 'jobId', 128) &&
+        isValidOptStr(data, 'quoteId', 128) &&
+        data.amount is number && data.amount >= 0 && data.amount <= 1000000 &&
+        data.status in ['draft', 'unpaid', 'paid', 'overdue', 'cancelled'] &&
+        isValidOptStr(data, 'dueDate', 40) &&
+        isValidOptStr(data, 'invoiceNumber', 40) &&
+        isValidOptStr(data, 'notes', 2000);
+    }
+
+    function isValidQuote(data, businessId) {
+      return !('id' in data) &&
+        hasValidCommonSubdocFields(data, businessId) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.clientName is string && data.clientName.size() >= 1 && data.clientName.size() <= 100 &&
+        isValidOptStr(data, 'clientId', 128) &&
+        isValidOptStr(data, 'jobId', 128) &&
+        data.amount is number && data.amount >= 0 && data.amount <= 1000000 &&
+        data.status in ['draft', 'awaiting_approval', 'approved', 'rejected', 'expired'] &&
+        isValidOptStr(data, 'lineItemsSummary', 4000) &&
+        isValidOptStr(data, 'clientMessage', 4000) &&
+        isValidOptStr(data, 'validUntil', 40);
+    }
+
     // ---- Businesses Collection & Subcollections ----
     match /businesses/{businessId} {
-      allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+      allow list: if isSignedIn() && isMemberArray(resource.data);
       allow get: if isSignedIn() && isValidId(businessId) && isMemberArray(existing());
 
       allow create: if isSignedIn() &&
@@ -272,23 +358,34 @@ service cloud.firestore {
         incoming().ownerId == request.auth.uid &&
         request.auth.uid in incoming().memberUids;
 
+      // Owner only. Business contact fields (contactName/Phone/Email,
+      // ownerEmail) are owner-only by this rule: members cannot update
+      // the business doc at all, so a member saving their own profile
+      // can never overwrite company contact info. Shape is checked
+      // field-by-field here instead of isValidBusiness(incoming()):
+      // legacy live docs (e.g. biz_1794932142514) predate some 1.2.1
+      // fields, and a full-shape check would block every update to them.
       allow update: if isSignedIn() &&
         isValidId(businessId) &&
-        isValidBusiness(incoming()) &&
         isOwnerData(existing()) &&
         incoming().ownerId == existing().ownerId &&
         incoming().createdAt == existing().createdAt &&
         incoming().diff(existing()).affectedKeys().hasOnly([
-          'name', 'serviceArea', 'businessHours', 'businessKnowledge',
-          'autonomyMode', 'dollarThreshold', 'aiReceptionistEnabled', 'answeringMode',
-          'activeEmployees', 'employeeTones', 'services', 'pricingApproach', 'brandTone',
+          'name', 'industry', 'size', 'services', 'pricingApproach', 'brandTone',
+          'businessKnowledge', 'painPoints', 'serviceArea', 'businessHours',
+          'emergencyAvailable', 'teamSize', 'servesResidential', 'servesCommercial',
+          'contactName', 'contactPhone', 'contactEmail', 'ownerEmail',
+          'autonomyMode', 'answeringMode', 'aiReceptionistEnabled', 'dollarThreshold',
+          'activeEmployees', 'employeeTones', 'availableDepartments',
+          'onboardingCompleted', 'subscriptionTier',
+          'memberUids', 'memberEmails', 'members', 'documentContactInfo',
           'updatedAt'
         ]);
 
       allow delete: if isSignedIn() && isValidId(businessId) && isOwnerData(existing());
 
       match /jobs/{jobId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(jobId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(jobId) && isValidJob(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -303,7 +400,7 @@ service cloud.firestore {
       }
 
       match /customers/{customerId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(customerId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(customerId) && isValidCustomer(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -317,7 +414,7 @@ service cloud.firestore {
       }
 
       match /tasks/{taskId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(taskId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(taskId) && isValidTask(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -331,7 +428,7 @@ service cloud.firestore {
       }
 
       match /calls/{callId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(callId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(callId) && isValidCall(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -340,7 +437,7 @@ service cloud.firestore {
       }
 
       match /voicemails/{voicemailId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(voicemailId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(voicemailId) && isValidVoicemail(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -354,7 +451,7 @@ service cloud.firestore {
       }
 
       match /requests/{requestId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(requestId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(requestId) && isValidRequest(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -369,7 +466,7 @@ service cloud.firestore {
       }
 
       match /actions/{actionId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(actionId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(actionId) && isValidAction(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -395,7 +492,7 @@ service cloud.firestore {
       }
 
       match /chatMessages/{messageId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(messageId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(messageId) && isValidChatMessage(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -404,7 +501,7 @@ service cloud.firestore {
       }
 
       match /teamMessages/{messageId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(messageId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(messageId) && isValidTeamMessage(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -413,7 +510,7 @@ service cloud.firestore {
       }
 
       match /agentMessages/{messageId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(messageId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(messageId) && isValidAgentMessage(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
@@ -427,13 +524,51 @@ service cloud.firestore {
       }
 
       match /auditLogs/{logId} {
-        allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+        allow list: if isSignedIn() && isMemberArray(resource.data);
         allow get: if isSignedIn() && isValidId(logId) && isMemberArray(existing());
         allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming(), businessId) &&
           request.auth.uid in incoming().memberUids && isParentMember(businessId);
         allow update: if false;
         allow delete: if isSignedIn() && isValidId(logId) && isOwnerData(existing());
       }
+
+      match /invoices/{invoiceId} {
+        allow list: if isSignedIn() && isMemberArray(resource.data);
+        allow get: if isSignedIn() && isValidId(invoiceId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(invoiceId) && isValidInvoice(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(invoiceId) && isValidInvoice(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'dueDate', 'notes', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(invoiceId) && isOwnerData(existing());
+      }
+
+      match /quotes/{quoteId} {
+        allow list: if isSignedIn() && isMemberArray(resource.data);
+        allow get: if isSignedIn() && isValidId(quoteId) && isMemberArray(existing());
+        allow create: if isSignedIn() && isValidId(quoteId) && isValidQuote(incoming(), businessId) &&
+          request.auth.uid in incoming().memberUids && isParentMember(businessId);
+        allow update: if isSignedIn() && isValidId(quoteId) && isValidQuote(incoming(), businessId) &&
+          isMemberArray(existing()) &&
+          incoming().businessId == existing().businessId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'jobId', 'validUntil', 'updatedAt']);
+        allow delete: if isSignedIn() && isValidId(quoteId) && isOwnerData(existing());
+      }
+    }
+
+    // Per-user profiles: a user may only read/write their own doc.
+    // Phone + contact email live here, never on the business doc.
+    match /users/{userId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidUserProfile(incoming());
+      allow update: if isSignedIn() && request.auth.uid == userId && isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid;
+      allow delete: if isSignedIn() && request.auth.uid == userId;
     }
   }
 }

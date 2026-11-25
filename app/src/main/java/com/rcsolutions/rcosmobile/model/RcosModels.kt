@@ -129,6 +129,12 @@ data class BusinessAccount(
     val ownerId: String = "",
     val memberUids: List<String> = emptyList(),
     val memberEmails: Map<String, String> = emptyMap(),
+    // Old-app roster shape (live docs): members[] of {userId, email, name, role}.
+    // Kept in sync by toCreateMap so both apps can read the same business.
+    val members: List<BusinessMember> = emptyList(),
+    // Old-app contact block (live docs): {email, phone, name}. The live
+    // business has NO top-level contactEmail — its email/phone live here.
+    val documentContactInfo: DocumentContactInfo? = null,
     val name: String = "",
     val industry: String = "general_small_business",
     val size: String = "Solo / Small Crew",
@@ -166,6 +172,23 @@ data class BusinessAccount(
             put("ownerId", uid)
             put("memberUids", memberUids.ifEmpty { listOf(uid) }.distinct().take(25))
             put("memberEmails", emailMap.ifEmpty { memberEmails })
+            // Dual-write the old app's roster shape so the business is
+            // readable by the server / old app too: members[] + memberEmails.
+            // A business written only with memberUids is invisible to the
+            // old app; one written only with members is invisible to the
+            // 1.2.1 memberUids queries. Write both, always.
+            put("members", listOf(mapOf(
+                "userId" to uid,
+                "email" to cleanEmail,
+                "name" to contactName.trim().ifEmpty { name.trim() },
+                "role" to "owner"
+            )))
+            val contactInfo = buildMap<String, Any?> {
+                put("email", contactEmail.trim().take(120).ifEmpty { null })
+                put("phone", contactPhone.trim().take(30).ifEmpty { null })
+                put("name", contactName.trim().take(100).ifEmpty { null })
+            }.filterValues { it != null }
+            if (contactInfo.isNotEmpty()) put("documentContactInfo", contactInfo)
             put("name", name.trim().take(100).ifEmpty { "My Business" })
             put("industry", industry.trim().take(60).ifEmpty { "general_small_business" })
             put("size", this@BusinessAccount.size.trim().take(50).ifEmpty { null })
@@ -197,6 +220,144 @@ data class BusinessAccount(
             put("updatedAt", FieldValue.serverTimestamp())
         }.filterValues { it != null } as Map<String, Any>
     }
+}
+
+// One entry of a business's members roster (old-app shape).
+@Keep
+@IgnoreExtraProperties
+data class BusinessMember(
+    val userId: String = "",
+    val email: String = "",
+    val name: String = "",
+    val role: String = "member",
+)
+
+// Business contact block (old-app shape). The live business keeps its
+// email/phone here, not in top-level contactEmail.
+@Keep
+@IgnoreExtraProperties
+data class DocumentContactInfo(
+    val email: String = "",
+    val phone: String = "",
+    val name: String = "",
+)
+
+// Per-user profile (top-level /users/{uid}). Phone + contact email live
+// HERE, per person — never on the business doc — so a member saving
+// their profile can never overwrite company contact info. Rules allow
+// a user to read/write only their own doc.
+@Keep
+@IgnoreExtraProperties
+data class UserProfile(
+    @DocumentId val id: String = "",
+    val uid: String = "",
+    val displayName: String = "",
+    val phone: String = "",
+    val contactEmail: String = "",
+    val businessIds: List<String> = emptyList(),
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+) {
+    fun toCreateMap(uid: String, email: String?): Map<String, Any> =
+        buildMap<String, Any?> {
+            put("uid", uid)
+            put("displayName", displayName.trim().take(100).ifEmpty { null })
+            put("phone", phone.trim().take(30).ifEmpty { null })
+            put("contactEmail", contactEmail.trim().lowercase()
+                .ifEmpty { email?.trim()?.lowercase().orEmpty() }.take(120).ifEmpty { null })
+            put("businessIds", businessIds.take(25))
+            put("createdAt", FieldValue.serverTimestamp())
+            put("updatedAt", FieldValue.serverTimestamp())
+        }.filterValues { it != null } as Map<String, Any>
+
+    fun toUpdateMap(): Map<String, Any> =
+        buildMap<String, Any?> {
+            put("displayName", displayName.trim().take(100))
+            put("phone", phone.trim().take(30))
+            put("contactEmail", contactEmail.trim().lowercase().take(120))
+            put("businessIds", businessIds.take(25))
+            put("updatedAt", FieldValue.serverTimestamp())
+        }.filterValues { it != null } as Map<String, Any>
+}
+
+// Money loop: Quote -> Job -> Invoice -> Paid. No Stripe: invoices track
+// Paid/Unpaid/Overdue status only.
+@Keep
+@IgnoreExtraProperties
+data class Invoice(
+    @DocumentId val id: String = "",
+    val businessId: String = "",
+    val ownerId: String = "",
+    val memberUids: List<String> = emptyList(),
+    val title: String = "",
+    val clientName: String = "",
+    val clientId: String = "",
+    val jobId: String = "",
+    val quoteId: String = "",
+    val amount: Double = 0.0,
+    val status: String = "unpaid",
+    val dueDate: String = "",
+    val invoiceNumber: String = "",
+    val notes: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+) {
+    fun toCreateMap(uid: String, bizOwnerId: String, members: List<String>): Map<String, Any> =
+        buildMap<String, Any?> {
+            put("businessId", businessId)
+            put("ownerId", bizOwnerId)
+            put("memberUids", members.ifEmpty { listOf(uid) }.distinct().take(25))
+            put("title", title.trim().take(200))
+            put("clientName", clientName.trim().take(100))
+            put("clientId", clientId.trim().take(128).ifEmpty { null })
+            put("jobId", jobId.trim().take(128).ifEmpty { null })
+            put("quoteId", quoteId.trim().take(128).ifEmpty { null })
+            put("amount", amount.coerceIn(0.0, 1_000_000.0))
+            put("status", if (status in listOf("draft", "unpaid", "paid", "overdue", "cancelled")) status else "unpaid")
+            put("dueDate", dueDate.trim().take(40).ifEmpty { null })
+            put("invoiceNumber", invoiceNumber.trim().take(40).ifEmpty { null })
+            put("notes", notes.trim().take(2000).ifEmpty { null })
+            put("createdAt", FieldValue.serverTimestamp())
+            put("updatedAt", FieldValue.serverTimestamp())
+        }.filterValues { it != null } as Map<String, Any>
+}
+
+@Keep
+@IgnoreExtraProperties
+data class Quote(
+    @DocumentId val id: String = "",
+    val businessId: String = "",
+    val ownerId: String = "",
+    val memberUids: List<String> = emptyList(),
+    val title: String = "",
+    val clientName: String = "",
+    val clientId: String = "",
+    val jobId: String = "",
+    val amount: Double = 0.0,
+    val status: String = "draft",
+    val lineItemsSummary: String = "",
+    val clientMessage: String = "",
+    val validUntil: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+) {
+    fun toCreateMap(uid: String, bizOwnerId: String, members: List<String>): Map<String, Any> =
+        buildMap<String, Any?> {
+            put("businessId", businessId)
+            put("ownerId", bizOwnerId)
+            put("memberUids", members.ifEmpty { listOf(uid) }.distinct().take(25))
+            put("title", title.trim().take(200))
+            put("clientName", clientName.trim().take(100))
+            put("clientId", clientId.trim().take(128).ifEmpty { null })
+            put("jobId", jobId.trim().take(128).ifEmpty { null })
+            put("amount", amount.coerceIn(0.0, 1_000_000.0))
+            put("status", if (status in listOf("draft", "awaiting_approval", "approved", "rejected", "expired")) status else "draft")
+            put("lineItemsSummary", lineItemsSummary.trim().take(4000).ifEmpty { null })
+            put("clientMessage", clientMessage.trim().take(4000).ifEmpty { null })
+            put("validUntil", validUntil.trim().take(40).ifEmpty { null })
+            put("createdAt", FieldValue.serverTimestamp())
+            put("updatedAt", FieldValue.serverTimestamp())
+        }.filterValues { it != null } as Map<String, Any>
 }
 
 @Keep
