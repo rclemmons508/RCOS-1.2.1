@@ -154,6 +154,20 @@ test("Authenticated owner can create and partially update BusinessAccount; ghost
     })
   );
 
+  // 8 fixes Nov 26 (item 5) — owner can save the service catalog
+  // (name + price per service) and switch the industry preset.
+  await assertSucceeds(
+    aliceDb.collection("businesses").doc("biz_1").update({
+      industry: "cleaning",
+      services: ["Standard Clean", "Deep Clean"],
+      serviceCatalog: [
+        { name: "Standard Clean", price: "$85" },
+        { name: "Deep Clean", price: "from $180" },
+      ],
+      updatedAt: pastDate(800),
+    })
+  );
+
   // Reject ghost field & @DocumentId 'id'
   await assertFails(
     aliceDb.collection("businesses").doc("biz_2").set({
@@ -283,6 +297,32 @@ test("Kotlin-aligned queries & CRUD for jobs, customers, tasks, calls, actions, 
     decision: "approved",
     summary: "Approved: Quote: Johnson Residence",
     createdAt: ts,
+  }));
+
+  // 8 fixes Nov 26 (item 3) — create a customer, then update its
+  // notes (aiSummary) and owner-defined custom fields (label + value).
+  await assertSucceeds(bizRef.collection("customers").doc("cust_1").set({
+    businessId: BIZ_ID,
+    ownerId: ALICE_UID,
+    memberUids: [ALICE_UID],
+    name: "Johnson Residence",
+    phone: "555-0100",
+    status: "active",
+    createdAt: ts,
+    updatedAt: ts,
+  }));
+  await assertSucceeds(bizRef.collection("customers").doc("cust_1").update({
+    aiSummary: "Prefers texting, not calls.",
+    customFields: [
+      { label: "Gate code", value: "0420" },
+      { label: "Preferred contact", value: "Text, not calls" },
+    ],
+    updatedAt: pastDate(1000),
+  }));
+  // A ghost field on the customer update is still rejected.
+  await assertFails(bizRef.collection("customers").doc("cust_1").update({
+    favoriteColor: "green",
+    updatedAt: pastDate(500),
   }));
 });
 

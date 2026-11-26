@@ -41,12 +41,34 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- 8 fixes Nov 26 (item 1) — deep link from the call-alert
+                 notification (FCM data deepLink rcosmobile://calls) so a
+                 tap opens the Calls tab instead of the home screen. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="rcosmobile" android:host="calls" />
+            </intent-filter>
         </activity>
+        <!-- 8 fixes Nov 26 (item 1) — FCM push alerts. The old Railway
+             server sends the alert to this app's token once the token is
+             registered (POST /api/push/register, same pushTokens shape as
+             the old app). google-services.json is restored by CI from the
+             GOOGLE_SERVICES_JSON secret (same project, same file). -->
+        <service
+            android:name=".notifications.RcosFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>

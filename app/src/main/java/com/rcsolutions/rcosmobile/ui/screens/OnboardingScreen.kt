@@ -30,7 +30,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -55,16 +54,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.rcsolutions.rcosmobile.data.RcosDefaults
 import com.rcsolutions.rcosmobile.model.AutonomyMode
 import com.rcsolutions.rcosmobile.model.OnboardingExtraction
 import com.rcsolutions.rcosmobile.model.UiState
+import com.rcsolutions.rcosmobile.ui.components.AppCheckSetupCard
 import com.rcsolutions.rcosmobile.ui.components.AuroraBackground
 import com.rcsolutions.rcosmobile.ui.components.AuroraCard
 import com.rcsolutions.rcosmobile.ui.components.AuroraPrimaryCta
@@ -120,7 +118,6 @@ fun OnboardingScreen(
     onCancel: () -> Unit,
 ) {
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     var step by remember { mutableIntStateOf(1) }
     var docOrDescription by remember { mutableStateOf("") }
     var attachedBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -259,70 +256,17 @@ fun OnboardingScreen(
                     )
                     Spacer(Modifier.height(16.dp))
 
-                    // App Check setup card — shown only when the AI call
-                    // was rejected because this build's debug token was
-                    // never registered in the Firebase console. The token
-                    // is shown here so it can be copied into the console
-                    // without adb or Logcat; manual entry still works.
+                    // App Check setup card — shared component (same card
+                    // the other AI screens show when an App Check call
+                    // fails). Shown only when the AI call was rejected
+                    // because this build's debug token was never
+                    // registered in the Firebase console.
                     if (appCheckError) {
-                        AuroraCard(highlighted = true) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Outlined.Warning, contentDescription = null, tint = AuroraRed)
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = "AI setup needed — one-time step",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = AuroraTextPrimary
-                                )
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = "Firebase AI is blocked because this build's debug token isn't registered in the Firebase console. Register it once, then tap \"Extract Details with AI\" again.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = AuroraTextSecondary
-                            )
-                            if (debugAppCheckToken != null) {
-                                Spacer(Modifier.height(10.dp))
-                                OutlinedTextField(
-                                    value = debugAppCheckToken,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Debug token — copy into the Firebase console") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = auroraFieldColors()
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    AuroraSecondaryCta(
-                                        text = "Copy token",
-                                        testTag = "onboarding_copy_appcheck_token",
-                                        onClick = { clipboard.setText(AnnotatedString(debugAppCheckToken)) },
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    TextButton(onClick = onDismissAppCheck) {
-                                        Text("Dismiss", color = AuroraTextSecondary)
-                                    }
-                                }
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    text = "In the Firebase console: Project Settings → App Check → this Android app → Manage debug tokens → Add debug token → paste this value → Save.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AuroraTextMuted
-                                )
-                            } else {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    text = "The token appears here after an AI call is attempted. Tap \"Extract Details with AI\" once, then come back to this screen to copy it.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = AuroraTextSecondary
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                TextButton(onClick = onDismissAppCheck) {
-                                    Text("Dismiss", color = AuroraTextSecondary)
-                                }
-                            }
-                        }
+                        AppCheckSetupCard(
+                            debugToken = debugAppCheckToken,
+                            onDismiss = onDismissAppCheck,
+                            copyButtonTestTag = "onboarding_copy_appcheck_token",
+                        )
                         Spacer(Modifier.height(14.dp))
                     }
 

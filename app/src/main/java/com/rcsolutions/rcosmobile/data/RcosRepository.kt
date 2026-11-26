@@ -890,6 +890,42 @@ class RcosRepository(
         }
     }
 
+    /** 8 fixes Nov 26 (item 4) — delete one AI Assistant thread: every
+     * chat message for this employee. The query carries the
+     * `memberUids array-contains uid` filter the rules' query checker
+     * requires (same as the observe queries). Deletes run in batches
+     * of 400 until none remain; only that employee's messages are
+     * removed — messages with no employee are shared history and stay.
+     * Rules allow delete only for the owner (`isOwnerData`). */
+    suspend fun deleteChatThread(businessId: String, employeeId: String): Result<Unit> {
+        val path = "businesses/$businessId/chatMessages"
+        return try {
+            val uid = requireUserId()
+            require(businessId.isNotBlank()) { "Business ID required." }
+            require(employeeId.isNotBlank()) { "Employee ID required." }
+            val col = db.collection("businesses").document(businessId).collection("chatMessages")
+            while (true) {
+                val snap = col
+                    .whereEqualTo("employeeId", employeeId)
+                    .whereArrayContains("memberUids", uid)
+                    .limit(400)
+                    .get()
+                    .await()
+                if (snap.isEmpty) break
+                val batch = db.batch()
+                for (doc in snap.documents) batch.delete(doc.reference)
+                batch.commit().await()
+                if (snap.size() < 400) break
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
+            Result.failure(e)
+        }
+    }
+
     suspend fun saveTeamMessage(business: BusinessAccount, text: String): Result<Unit> {
         var path = "businesses/${business.id}/teamMessages"
         return try {

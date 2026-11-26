@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -78,7 +79,10 @@ import com.rcsolutions.rcosmobile.model.AgentSettings
 import com.rcsolutions.rcosmobile.model.AuditLog
 import com.rcsolutions.rcosmobile.model.AutonomyMode
 import com.rcsolutions.rcosmobile.model.BusinessAccount
+import com.rcsolutions.rcosmobile.model.BusinessMember
+import com.rcsolutions.rcosmobile.model.BusinessService
 import com.rcsolutions.rcosmobile.model.TeamMessage
+import com.rcsolutions.rcosmobile.model.UserProfile
 import com.rcsolutions.rcosmobile.notifications.appNotificationSettingsIntent
 import com.rcsolutions.rcosmobile.notifications.areNotificationsEnabled
 import com.rcsolutions.rcosmobile.ui.components.AuroraCard
@@ -97,6 +101,7 @@ import java.util.Locale
 private enum class AccountModal {
     NONE,
     BUSINESS_PROFILE,
+    PERSONAL_PROFILE,
     SUBSCRIPTION_AUTONOMY,
     AI_TEAM_RULES,
     NOTIFICATIONS,
@@ -116,9 +121,12 @@ fun AccountScreen(
     teamMessages: List<TeamMessage>,
     auditLogs: List<AuditLog>,
     actions: List<ActionRecord>,
+    userProfile: UserProfile? = null,
     onSwitchBusiness: (String) -> Unit,
     onCreateNewWorkspace: () -> Unit,
     onUpdateBusiness: (Map<String, Any>, String) -> Unit,
+    onSaveUserProfile: (String, String, String) -> Unit = { _, _, _ -> },
+    onAddTeamMember: (String, String, String) -> Unit = { _, _, _ -> },
     onToggleEmployee: (String, Boolean) -> Unit,
     onSaveAgentSettings: (String, AgentSettings) -> Unit,
     onToggleAutomationMaster: (Boolean) -> Unit,
@@ -214,6 +222,17 @@ fun AccountScreen(
         // Settings Menu Rows matching Screen 7
         item {
             AuroraCard(contentPadding = PaddingValues(0.dp), modifier = Modifier.fillMaxWidth()) {
+                // 8 fixes Nov 26 (item 7) — the owner's own personal
+                // profile (name, phone, email), stored per-user on
+                // /users/{uid} — never on the business record.
+                AccountMenuRow(
+                    icon = Icons.Outlined.Person,
+                    title = "My Profile",
+                    subtitle = userProfile?.phone?.ifBlank { null } ?: ownerEmail,
+                    testTag = "account_my_profile",
+                    onClick = { activeModal = AccountModal.PERSONAL_PROFILE }
+                )
+                AuroraDivider()
                 AccountMenuRow(
                     icon = Icons.Outlined.Business,
                     title = "Business Profile",
@@ -295,7 +314,40 @@ fun AccountScreen(
             var bizName by remember(business?.id) { mutableStateOf(business?.name.orEmpty()) }
             var area by remember(business?.id) { mutableStateOf(business?.serviceArea.orEmpty()) }
             var hours by remember(business?.id) { mutableStateOf(business?.businessHours.orEmpty()) }
-            var knowledge by remember(business?.id) { mutableStateOf(business?.businessKnowledge.orEmpty()) }
+            // 8 fixes Nov 26 (item 5) — the industry preset and the
+            // service catalog (name + price) are editable here. When
+            // the catalog is empty but the business has service names,
+            // seed it from those names so nothing is lost.
+            var selectedIndustryId by remember(business?.id) { mutableStateOf(business?.industry ?: "general_small_business") }
+            var catalog by remember(business?.id) {
+                mutableStateOf(
+                    business?.serviceCatalog?.ifEmpty { null }
+                        ?: business?.services.orEmpty().map { BusinessService(name = it, price = "") }
+                )
+            }
+            // The stored "Teach Your Team" text is generic SaaS copy on
+            // the live business ("Offers 24/7 AI-driven customer
+            // service... subscription-based software service"). When
+            // it is blank or generic, prefill it from THIS business's
+            // own details instead — never a generic description.
+            var knowledge by remember(business?.id) {
+                mutableStateOf(
+                    business?.businessKnowledge.orEmpty().let { stored ->
+                        if (isGenericBusinessKnowledge(stored)) {
+                            buildBusinessKnowledge(
+                                business?.name.orEmpty(),
+                                RcosDefaults.findPreset(business?.industry ?: "general_small_business").name,
+                                business?.serviceArea.orEmpty(),
+                                business?.businessHours.orEmpty(),
+                                business?.services.orEmpty()
+                            )
+                        } else stored
+                    }
+                )
+            }
+            var showIndustryPicker by remember { mutableStateOf(false) }
+            var newServiceName by remember { mutableStateOf("") }
+            var newServicePrice by remember { mutableStateOf("") }
 
             AlertDialog(
                 onDismissRequest = { activeModal = AccountModal.NONE },
@@ -363,7 +415,84 @@ fun AccountScreen(
                         OutlinedTextField(value = bizName, onValueChange = { bizName = it }, label = { Text("Company Name") }, singleLine = true, colors = auroraFieldColors())
                         OutlinedTextField(value = area, onValueChange = { area = it }, label = { Text("Service Area / City") }, singleLine = true, colors = auroraFieldColors())
                         OutlinedTextField(value = hours, onValueChange = { hours = it }, label = { Text("Operating Hours") }, singleLine = true, colors = auroraFieldColors())
+                        // Industry preset picker.
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Industry", style = MaterialTheme.typography.labelMedium, color = AuroraTextSecondary)
+                                Text(
+                                    RcosDefaults.findPreset(selectedIndustryId).name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AuroraTextPrimary
+                                )
+                            }
+                            TextButton(onClick = { showIndustryPicker = true }) {
+                                Text("Change", color = AuroraEmerald)
+                            }
+                        }
+                        AuroraDivider()
+                        // Jobs & services with prices. `services` stays
+                        // in sync with the catalog names on save, so the
+                        // job options follow the catalog.
+                        Text("Jobs & Services", style = MaterialTheme.typography.labelMedium, color = AuroraEmerald)
+                        if (catalog.isEmpty()) {
+                            Text(
+                                "No services listed yet — add your first one below.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AuroraTextSecondary
+                            )
+                        }
+                        catalog.forEachIndexed { index, service ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = service.name,
+                                    onValueChange = { newName ->
+                                        catalog = catalog.mapIndexed { i, s -> if (i == index) s.copy(name = newName) else s }
+                                    },
+                                    label = { Text("Service") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                    colors = auroraFieldColors()
+                                )
+                                OutlinedTextField(
+                                    value = service.price,
+                                    onValueChange = { newPrice ->
+                                        catalog = catalog.mapIndexed { i, s -> if (i == index) s.copy(price = newPrice) else s }
+                                    },
+                                    label = { Text("Price") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(0.6f),
+                                    colors = auroraFieldColors()
+                                )
+                                TextButton(onClick = { catalog = catalog.filterIndexed { i, _ -> i != index } }) {
+                                    Text("Remove", color = AuroraTextMuted)
+                                }
+                            }
+                        }
+                        OutlinedTextField(value = newServiceName, onValueChange = { newServiceName = it }, label = { Text("New service name") }, singleLine = true, colors = auroraFieldColors())
+                        OutlinedTextField(value = newServicePrice, onValueChange = { newServicePrice = it }, label = { Text("Price (optional)") }, singleLine = true, colors = auroraFieldColors())
+                        TextButton(onClick = {
+                            if (newServiceName.isNotBlank()) {
+                                catalog = catalog + BusinessService(name = newServiceName.trim(), price = newServicePrice.trim())
+                                newServiceName = ""
+                                newServicePrice = ""
+                            }
+                        }) {
+                            Text("+ Add Service", color = AuroraEmerald)
+                        }
+                        AuroraDivider()
                         OutlinedTextField(value = knowledge, onValueChange = { knowledge = it }, label = { Text("Teach Your Team (Pricing & Policies)") }, minLines = 3, maxLines = 5, colors = auroraFieldColors())
+                        TextButton(onClick = {
+                            knowledge = buildBusinessKnowledge(bizName, RcosDefaults.findPreset(selectedIndustryId).name, area, hours, catalog.map { it.name })
+                        }) {
+                            Text("Reset to my business details", color = AuroraEmerald)
+                        }
                         TextButton(onClick = { activeModal = AccountModal.NONE; onCreateNewWorkspace() }) {
                             Text("+ Create Another Business Workspace", color = AuroraEmerald)
                         }
@@ -372,9 +501,13 @@ fun AccountScreen(
                 confirmButton = {
                     TextButton(onClick = {
                         if (bizName.isNotBlank()) {
+                            val cleanCatalog = catalog.filter { it.name.isNotBlank() }
                             onUpdateBusiness(
                                 mapOf(
                                     "name" to bizName.trim().take(100),
+                                    "industry" to selectedIndustryId,
+                                    "services" to cleanCatalog.map { it.name.trim() },
+                                    "serviceCatalog" to cleanCatalog.map { it.toMap() },
                                     "serviceArea" to area.trim().take(120),
                                     "businessHours" to hours.trim().take(120),
                                     "businessKnowledge" to knowledge.trim().take(8000)
@@ -382,6 +515,99 @@ fun AccountScreen(
                                 "Business profile updated."
                             )
                         }
+                        activeModal = AccountModal.NONE
+                    }) { Text("Save", color = AuroraEmerald) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { activeModal = AccountModal.NONE }) { Text("Cancel", color = AuroraTextSecondary) }
+                }
+            )
+
+            // Industry picker — a plain list dialog; the dropdown would
+            // fight the scrolling AlertDialog above it. Picking a preset
+            // resets services to that trade's defaults; the knowledge
+            // text is rebuilt only when it is still generic/blank, so
+            // a hand-written description is never overwritten.
+            if (showIndustryPicker) {
+                AlertDialog(
+                    onDismissRequest = { showIndustryPicker = false },
+                    containerColor = AuroraCardElevated,
+                    title = { Text("Choose Industry", color = AuroraTextPrimary) },
+                    text = {
+                        Column(
+                            modifier = Modifier.verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            RcosDefaults.INDUSTRY_PRESETS.forEach { preset ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            selectedIndustryId = preset.id
+                                            catalog = preset.defaultServices.map { BusinessService(name = it, price = "") }
+                                            if (isGenericBusinessKnowledge(knowledge)) {
+                                                knowledge = buildBusinessKnowledge(bizName, preset.name, area, hours, preset.defaultServices)
+                                            }
+                                            showIndustryPicker = false
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            preset.name,
+                                            color = if (preset.id == selectedIndustryId) AuroraEmerald else AuroraTextPrimary,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (preset.id == selectedIndustryId) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        Text(preset.description, color = AuroraTextMuted, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showIndustryPicker = false }) {
+                            Text("Cancel", color = AuroraTextSecondary)
+                        }
+                    }
+                )
+            }
+        }
+
+        AccountModal.PERSONAL_PROFILE -> {
+            // 8 fixes Nov 26 (item 7) — the owner's own personal
+            // profile: name, phone, email. Saved per-user on
+            // /users/{uid} only — it never writes to the business
+            // record, so a member can never overwrite company contact
+            // info by saving their own details (the Oct 25 bug).
+            var displayName by remember { mutableStateOf(userProfile?.displayName?.ifBlank { null } ?: ownerName) }
+            var phone by remember { mutableStateOf(userProfile?.phone.orEmpty()) }
+            var email by remember { mutableStateOf(userProfile?.contactEmail?.ifBlank { null } ?: ownerEmail) }
+
+            AlertDialog(
+                onDismissRequest = { activeModal = AccountModal.NONE },
+                containerColor = AuroraCardElevated,
+                title = { Text("My Profile", color = AuroraTextPrimary) },
+                text = {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Your personal contact info. Saved to your profile only — never to the business record.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraTextSecondary
+                        )
+                        OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Name") }, singleLine = true, colors = auroraFieldColors())
+                        OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Phone") }, singleLine = true, colors = auroraFieldColors())
+                        OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") }, singleLine = true, colors = auroraFieldColors())
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        onSaveUserProfile(displayName, phone, email)
                         activeModal = AccountModal.NONE
                     }) { Text("Save", color = AuroraEmerald) }
                 },
@@ -592,6 +818,8 @@ fun AccountScreen(
                     TeamChatThread(
                         messages = teamMessages,
                         currentUserId = currentUserId,
+                        members = business?.members.orEmpty(),
+                        onAddMember = onAddTeamMember,
                         onSend = onSendTeamMessage,
                         onClose = { activeModal = AccountModal.NONE }
                     )
@@ -797,10 +1025,13 @@ private fun workspaceSubtitle(business: BusinessAccount): String {
 private fun TeamChatThread(
     messages: List<TeamMessage>,
     currentUserId: String,
+    members: List<BusinessMember> = emptyList(),
+    onAddMember: (String, String, String) -> Unit = { _, _, _ -> },
     onSend: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
+    var showAddMember by remember { mutableStateOf(false) }
     val sorted = remember(messages) {
         messages.sortedBy { it.createdAt?.toDate()?.time ?: 0L }
     }
@@ -832,6 +1063,26 @@ private fun TeamChatThread(
             )
             TextButton(onClick = onClose) {
                 Text("Done", color = AuroraEmerald)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // 8 fixes Nov 26 (item 6) — the team roster, so the owner can
+        // see who is in team chat, and an add-member control. Invited
+        // members (no UID yet) show as "Invited".
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (members.isEmpty()) "Team: just you" else "Team: ${members.joinToString(", ") { it.name.ifBlank { it.email }.ifBlank { "Teammate" } }}",
+                style = MaterialTheme.typography.labelMedium,
+                color = AuroraTextSecondary,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = { showAddMember = true }) {
+                Text("+ Add Member", color = AuroraEmerald)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -929,9 +1180,87 @@ private fun TeamChatThread(
             }
         }
     }
+
+    // 8 fixes Nov 26 (item 6) — invite a team member by name + email
+    // or phone. They join the business roster (no UID until they sign
+    // in) and appear in the roster above immediately.
+    if (showAddMember) {
+        var memberName by remember { mutableStateOf("") }
+        var memberEmail by remember { mutableStateOf("") }
+        var memberPhone by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddMember = false },
+            containerColor = AuroraCardElevated,
+            title = { Text("Add Team Member", color = AuroraTextPrimary) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(value = memberName, onValueChange = { memberName = it }, label = { Text("Name") }, singleLine = true, colors = auroraFieldColors())
+                    OutlinedTextField(value = memberEmail, onValueChange = { memberEmail = it }, label = { Text("Email") }, singleLine = true, colors = auroraFieldColors())
+                    OutlinedTextField(value = memberPhone, onValueChange = { memberPhone = it }, label = { Text("Phone (optional)") }, singleLine = true, colors = auroraFieldColors())
+                    Text(
+                        "They'll appear in the team chat roster. They join fully once they sign in to the app.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AuroraTextSecondary
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (memberName.isNotBlank() && (memberEmail.isNotBlank() || memberPhone.isNotBlank())) {
+                        onAddMember(memberName.trim(), memberEmail.trim(), memberPhone.trim())
+                        showAddMember = false
+                    }
+                }) {
+                    Text("Add", color = AuroraEmerald)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddMember = false }) {
+                    Text("Cancel", color = AuroraTextSecondary)
+                }
+            }
+        )
+    }
 }
 
 private fun formatChatTime(createdAt: com.google.firebase.Timestamp?): String {
     val date = createdAt?.toDate() ?: return ""
     return SimpleDateFormat("h:mm a", Locale.US).format(date)
+}
+
+/** 8 fixes Nov 26 (item 5) — true when the stored "Teach Your Team"
+ * text is blank or the generic SaaS copy the live business still
+ * carries ("Offers 24/7 AI-driven customer service... subscription-
+ * based software service"). A hand-written description of the real
+ * business is never generic. */
+private fun isGenericBusinessKnowledge(text: String): Boolean {
+    val t = text.trim()
+    return t.isEmpty() ||
+        t.contains("subscription-based software service", ignoreCase = true) ||
+        t.contains("SaaS", ignoreCase = true)
+}
+
+/** 8 fixes Nov 26 (item 5) — build the "Teach Your Team" text from
+ * THIS business's own details (name, industry, service area, hours,
+ * services). Never a generic description of a different business. */
+private fun buildBusinessKnowledge(
+    name: String,
+    industryName: String,
+    serviceArea: String,
+    hours: String,
+    serviceNames: List<String>,
+): String {
+    val services = serviceNames.filter { it.isNotBlank() }.take(6)
+    return buildString {
+        append(name.ifBlank { "This business" })
+        append(" — $industryName")
+        if (serviceArea.isNotBlank()) append(" serving $serviceArea")
+        append(". ")
+        if (services.isNotEmpty()) append("Services: ${services.joinToString(", ")}. ")
+        if (hours.isNotBlank()) append("Hours: $hours. ")
+        append("The AI team answers calls, books jobs, and follows up with customers.")
+    }
 }

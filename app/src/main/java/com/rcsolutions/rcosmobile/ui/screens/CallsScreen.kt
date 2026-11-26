@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.HeadsetMic
 import androidx.compose.material.icons.outlined.Phone
 import androidx.compose.material.icons.outlined.PhoneCallback
+import androidx.compose.material.icons.outlined.PhoneInTalk
 import androidx.compose.material.icons.outlined.PhoneMissed
 import androidx.compose.material.icons.outlined.Voicemail
 import androidx.compose.material3.AlertDialog
@@ -49,6 +50,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,8 +67,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.rcsolutions.rcosmobile.data.LiveCall
 import com.rcsolutions.rcosmobile.data.OUTBOUND_SETUP_MESSAGE
 import com.rcsolutions.rcosmobile.data.OutboundStatus
+import com.rcsolutions.rcosmobile.data.ServerPhoneCall
+import com.rcsolutions.rcosmobile.data.parseIso8601ToTimestamp
 import com.rcsolutions.rcosmobile.model.BusinessAccount
 import com.rcsolutions.rcosmobile.model.CallDirection
 import com.rcsolutions.rcosmobile.model.CallRecord
@@ -77,11 +82,10 @@ import com.rcsolutions.rcosmobile.model.OutboundCallStatus
 import com.rcsolutions.rcosmobile.model.OutboundCallUiState
 import com.rcsolutions.rcosmobile.model.VoicemailRecord
 import com.rcsolutions.rcosmobile.ui.components.AuroraCard
-import com.rcsolutions.rcosmobile.ui.components.AuroraDivider
 import com.rcsolutions.rcosmobile.ui.components.AuroraEmptyState
 import com.rcsolutions.rcosmobile.ui.components.AuroraFilterPill
 import com.rcsolutions.rcosmobile.ui.components.AuroraPrimaryCta
-import com.rcsolutions.rcosmobile.ui.components.AuroraSecondaryCta
+import com.rcsolutions.rcosmobile.ui.components.AuroraSectionHeader
 import com.rcsolutions.rcosmobile.ui.theme.AuroraAmber
 import com.rcsolutions.rcosmobile.ui.theme.AuroraBorder
 import com.rcsolutions.rcosmobile.ui.theme.AuroraCardElevated
@@ -91,7 +95,48 @@ import com.rcsolutions.rcosmobile.ui.theme.AuroraRed
 import com.rcsolutions.rcosmobile.ui.theme.AuroraTextMuted
 import com.rcsolutions.rcosmobile.ui.theme.AuroraTextPrimary
 import com.rcsolutions.rcosmobile.ui.theme.AuroraTextSecondary
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Locale
+
+/** One server-log entry mapped onto the app's call record shape. The
+ * server's log is the ONLY record of receptionist-answered calls (it
+ * writes them to its own store, not Firestore), so the Calls screen
+ * merges it with the Firestore log. The two sources are disjoint —
+ * the app's dialer logs outbound calls to Firestore only, never to
+ * the server — so no dedupe is needed. `createdAt` is parsed from
+ * the server's ISO timestamp so the merged list sorts newest first. */
+private fun ServerPhoneCall.toCallRecord(): CallRecord {
+    val ts = parseIso8601ToTimestamp(timestamp)
+    val timeLabel = ts?.let { SimpleDateFormat("h:mm a", Locale.US).format(it.toDate()) } ?: ""
+    val durationLabel = when {
+        duration >= 60 -> "${duration / 60}m ${duration % 60}s"
+        duration > 0 -> "${duration}s"
+        else -> "—"
+    }
+    return CallRecord(
+        id = "server_$id",
+        callerName = callerName.ifBlank { callerNumber },
+        callerNumber = callerNumber,
+        direction = if (type == "outbound") CallDirection.OUTBOUND.code else CallDirection.INBOUND.code,
+        status = when (status) {
+            "missed" -> CallStatus.MISSED.code
+            "voicemail" -> CallStatus.VOICEMAIL.code
+            else -> CallStatus.COMPLETED.code
+        },
+        durationLabel = durationLabel,
+        timeLabel = timeLabel,
+        summary = summary,
+        answeredBy = answeredBy.ifBlank { "ai_receptionist" },
+        createdAt = ts,
+    )
+}
+
+/** Merge the Firestore log with the server's log, newest first. */
+private fun mergeCallLogs(firestoreCalls: List<CallRecord>, serverCalls: List<ServerPhoneCall>): List<CallRecord> {
+    val merged = firestoreCalls + serverCalls.map { it.toCallRecord() }
+    return merged.sortedByDescending { it.createdAt?.seconds ?: 0L }
+}
 
 private enum class CallFilter(val label: String) {
     ALL("All"),
@@ -106,6 +151,17 @@ fun CallsScreen(
     calls: List<CallRecord>,
     voicemails: List<VoicemailRecord>,
     liveVoiceState: LiveVoiceUiState,
+    // 8 fixes Nov 26 (item 1) — live calls the receptionist is
+    // handling right now (GET /api/calls/live) and the server's
+    // finished-call log (GET /api/phone/calls). Errors are passed
+    // through so the screen can say so honestly instead of showing a
+    // fake empty log.
+    liveCalls: List<LiveCall> = emptyList(),
+    liveCallsError: String? = null,
+    serverCalls: List<ServerPhoneCall> = emptyList(),
+    serverCallsError: String? = null,
+    onStartLivePolling: () -> Unit = {},
+    onStopLivePolling: () -> Unit = {},
     onToggleAiReceptionist: (Boolean) -> Unit,
     onStartLiveReceptionistCall: () -> Unit,
     onStopLiveReceptionistCall: () -> Unit,
@@ -121,13 +177,20 @@ fun CallsScreen(
     val context = LocalContext.current
     var selectedFilter by remember { mutableStateOf(CallFilter.ALL) }
     var showMakeCallDialog by remember { mutableStateOf(false) }
-    var showFullLogDialog by remember { mutableStateOf(false) }
     var micDeniedMessage by remember { mutableStateOf<String?>(null) }
     // Dialpad state. The call button opens the Dial & Log dialog
     // prefilled with the dialed number — confirming it starts the
     // in-app LiveKit call.
     var dialedNumber by remember { mutableStateOf("") }
     var dialpadPrefill by remember { mutableStateOf("") }
+
+    // 8 fixes Nov 26 (item 1) — poll the server for live calls and the
+    // finished-call log while this screen is visible; stop when it
+    // leaves, so no polling runs in the background.
+    DisposableEffect(Unit) {
+        onStartLivePolling()
+        onDispose { onStopLivePolling() }
+    }
 
     val micLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -167,6 +230,11 @@ fun CallsScreen(
 
     val aiEnabled = business?.aiReceptionistEnabled ?: true
 
+    // 8 fixes Nov 26 (items 1d + 2) — the log is the Firestore log
+    // MERGED with the server's log, so receptionist-answered calls
+    // finally appear here. Newest first. The counts below follow the
+    // merged list.
+    val mergedCalls = remember(calls, serverCalls) { mergeCallLogs(calls, serverCalls) }
     val nowSeconds = remember { System.currentTimeMillis() / 1000L }
     val startOfDaySec = remember {
         Calendar.getInstance().apply {
@@ -175,15 +243,15 @@ fun CallsScreen(
             set(Calendar.SECOND, 0)
         }.timeInMillis / 1000L
     }
-    val todayCount = calls.count { (it.createdAt?.seconds ?: nowSeconds) >= startOfDaySec }
-    val missedCount = calls.count { it.status == CallStatus.MISSED.code || it.direction == CallDirection.MISSED.code }
-    val weekCount = calls.count { (it.createdAt?.seconds ?: nowSeconds) >= nowSeconds - 7L * 86400L }
+    val todayCount = mergedCalls.count { (it.createdAt?.seconds ?: nowSeconds) >= startOfDaySec }
+    val missedCount = mergedCalls.count { it.status == CallStatus.MISSED.code || it.direction == CallDirection.MISSED.code }
+    val weekCount = mergedCalls.count { (it.createdAt?.seconds ?: nowSeconds) >= nowSeconds - 7L * 86400L }
 
-    val filteredCalls = remember(calls, selectedFilter) {
+    val filteredCalls = remember(mergedCalls, selectedFilter) {
         when (selectedFilter) {
-            CallFilter.ALL -> calls
-            CallFilter.ACTIVE -> calls.filter { it.status == CallStatus.ACTIVE.code || it.answeredBy == "ai_receptionist" }
-            CallFilter.MISSED -> calls.filter { it.status == CallStatus.MISSED.code || it.direction == CallDirection.MISSED.code }
+            CallFilter.ALL -> mergedCalls
+            CallFilter.ACTIVE -> mergedCalls.filter { it.status == CallStatus.ACTIVE.code || it.answeredBy == "ai_receptionist" }
+            CallFilter.MISSED -> mergedCalls.filter { it.status == CallStatus.MISSED.code || it.direction == CallDirection.MISSED.code }
             CallFilter.VOICEMAIL -> emptyList()
         }
     }
@@ -234,6 +302,59 @@ fun CallsScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 12.dp)
         ) {
+            // 8 fixes Nov 26 (item 1c) — a call the receptionist is
+            // handling RIGHT NOW. Polled every 6s while this screen is
+            // visible. Never faked: the card only appears when the
+            // server actually reports a live call.
+            liveCalls.forEach { liveCall ->
+                item(key = "live_${liveCall.roomName}") {
+                    AuroraCard(
+                        highlighted = true,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(AuroraEmerald.copy(alpha = 0.16f))
+                                    .border(1.dp, AuroraEmerald.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.PhoneInTalk,
+                                    contentDescription = "Live call",
+                                    tint = AuroraEmerald
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Live now — ${liveCall.callerNumber}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = AuroraTextPrimary
+                                )
+                                Text(
+                                    text = if (liveCall.status == "answered") "Receptionist is talking to this caller" else "Ringing — receptionist is picking up",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AuroraEmerald
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (liveCalls.isEmpty() && liveCallsError != null) {
+                item {
+                    Text(
+                        text = "Live calls unavailable — couldn't reach the server.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AuroraAmber,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
             // AI Receptionist Live Toggle Card
             item {
                 AuroraCard(
@@ -354,6 +475,29 @@ fun CallsScreen(
                 }
             }
 
+            // 8 fixes Nov 26 (item 2) — the call log, visible on this
+            // screen without opening a dialog. The totals live in the
+            // metrics card above; the old "Full Call & Receptionist
+            // Log" dialog is gone.
+            item {
+                Column {
+                    AuroraSectionHeader(title = "Call Log")
+                    Text(
+                        text = "AI Receptionist: ${if (aiEnabled) "Active (24/7)" else "Manual Ring"} • ${mergedCalls.size} calls • ${voicemails.size} voicemails",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AuroraTextSecondary
+                    )
+                    if (serverCallsError != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Server call log unavailable — showing calls saved on this device.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuroraAmber
+                        )
+                    }
+                }
+            }
+
             if (selectedFilter == CallFilter.VOICEMAIL) {
                 if (voicemails.isEmpty()) {
                     item {
@@ -449,6 +593,19 @@ fun CallsScreen(
                                     color = if (isMissed) AuroraRed else AuroraTextSecondary,
                                     maxLines = 1
                                 )
+                                // 8 fixes Nov 26 (item 2) — the
+                                // receptionist's summary, when the
+                                // server recorded one, so the row says
+                                // what the call was about.
+                                if (call.summary.isNotBlank()) {
+                                    Text(
+                                        text = call.summary,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = AuroraTextMuted,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                             Text(
                                 text = call.timeLabel.ifBlank { "Today" },
@@ -518,12 +675,6 @@ fun CallsScreen(
             icon = Icons.Outlined.Add,
             testTag = "calls_make_call_button",
             onClick = { dialpadPrefill = ""; showMakeCallDialog = true }
-        )
-        Spacer(Modifier.height(8.dp))
-        AuroraSecondaryCta(
-            text = "View Full Call Log (${calls.size})",
-            testTag = "calls_view_full_log_button",
-            onClick = { showFullLogDialog = true }
         )
     }
 
@@ -596,44 +747,6 @@ fun CallsScreen(
             dismissButton = {
                 TextButton(onClick = { showMakeCallDialog = false }) {
                     Text("Cancel", color = AuroraTextSecondary)
-                }
-            }
-        )
-    }
-
-    if (showFullLogDialog) {
-        AlertDialog(
-            onDismissRequest = { showFullLogDialog = false },
-            containerColor = AuroraCardElevated,
-            title = { Text("Full Call & Receptionist Log", color = AuroraTextPrimary) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "AI Receptionist Status: ${if (aiEnabled) "Active (24/7)" else "Manual Ring"}",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = AuroraEmerald
-                    )
-                    Text(
-                        text = "Total Logged Calls: ${calls.size}  •  Voicemails: ${voicemails.size}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = AuroraTextSecondary
-                    )
-                    AuroraDivider()
-                    calls.take(6).forEach { c ->
-                        Text(
-                            text = "${c.callerName} (${c.callerNumber}) — ${c.status} (${c.timeLabel})",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AuroraTextPrimary
-                        )
-                    }
-                    if (calls.isEmpty()) {
-                        Text("No calls recorded yet.", style = MaterialTheme.typography.bodyMedium, color = AuroraTextMuted)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showFullLogDialog = false }) {
-                    Text("Done", color = AuroraEmerald)
                 }
             }
         )

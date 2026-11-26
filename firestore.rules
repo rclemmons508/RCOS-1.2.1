@@ -108,6 +108,7 @@ service cloud.firestore {
         data.industry is string && data.industry.size() >= 1 && data.industry.size() <= 60 &&
         isValidOptStr(data, 'size', 50) &&
         isValidOptList(data, 'services', 40) &&
+        (!('serviceCatalog' in data) || (data.serviceCatalog is list && data.serviceCatalog.size() <= 40)) &&
         isValidOptStr(data, 'pricingApproach', 150) &&
         isValidOptStr(data, 'brandTone', 150) &&
         isValidOptStr(data, 'businessKnowledge', 8000) &&
@@ -173,7 +174,8 @@ service cloud.firestore {
         isValidOptStr(data, 'lastContactDate', 40) &&
         isValidOptStr(data, 'serviceType', 100) &&
         isValidOptStr(data, 'aiSummary', 1000) &&
-        isValidOptList(data, 'tags', 15);
+        isValidOptList(data, 'tags', 15) &&
+        (!('customFields' in data) || (data.customFields is list && data.customFields.size() <= 20));
     }
 
     function isValidTask(data, businessId) {
@@ -371,7 +373,7 @@ service cloud.firestore {
         incoming().ownerId == existing().ownerId &&
         incoming().createdAt == existing().createdAt &&
         incoming().diff(existing()).affectedKeys().hasOnly([
-          'name', 'industry', 'size', 'services', 'pricingApproach', 'brandTone',
+          'name', 'industry', 'size', 'services', 'serviceCatalog', 'pricingApproach', 'brandTone',
           'businessKnowledge', 'painPoints', 'serviceArea', 'businessHours',
           'emergencyAvailable', 'teamSize', 'servesResidential', 'servesCommercial',
           'contactName', 'contactPhone', 'contactEmail', 'ownerEmail',
@@ -409,7 +411,7 @@ service cloud.firestore {
           incoming().businessId == existing().businessId &&
           incoming().ownerId == existing().ownerId &&
           incoming().createdAt == existing().createdAt &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'phone', 'email', 'address', 'aiSummary', 'updatedAt']);
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'phone', 'email', 'address', 'aiSummary', 'customFields', 'updatedAt']);
         allow delete: if isSignedIn() && isValidId(customerId) && isOwnerData(existing());
       }
 

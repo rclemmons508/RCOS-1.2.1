@@ -1,5 +1,6 @@
 package com.rcsolutions.rcosmobile
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -60,6 +61,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.credentials.CredentialManager
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
@@ -95,6 +97,7 @@ import com.rcsolutions.rcosmobile.model.UiState
 import com.rcsolutions.rcosmobile.notifications.ensureCallAlertsChannel
 import com.rcsolutions.rcosmobile.security.configureAppCheck
 import com.rcsolutions.rcosmobile.ui.MainViewModel
+import com.rcsolutions.rcosmobile.ui.components.AppCheckSetupCard
 import com.rcsolutions.rcosmobile.ui.components.AuroraBackground
 import com.rcsolutions.rcosmobile.ui.components.AuroraCard
 import com.rcsolutions.rcosmobile.ui.components.AuroraPrimaryCta
@@ -122,6 +125,8 @@ import com.rcsolutions.rcosmobile.ui.theme.AuroraTextMuted
 import com.rcsolutions.rcosmobile.ui.theme.AuroraTextPrimary
 import com.rcsolutions.rcosmobile.ui.theme.AuroraTextSecondary
 import com.rcsolutions.rcosmobile.ui.theme.AuroraOneTheme
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 
 @Serializable data object HomeRoute
@@ -150,9 +155,26 @@ private val PRIMARY_TABS = listOf(
 )
 
 class MainActivity : FragmentActivity() {
+    // 8 fixes Nov 26 (item 1) — the call-alert notification's deep
+    // link (rcosmobile://calls). singleTop delivers it to onNewIntent
+    // when the app is already running; the launch intent carries it on
+    // a cold start. The shell consumes it by navigating to Calls.
+    private val pendingDeepLink = MutableStateFlow<String?>(null)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingDeepLink.value = intent.data?.let { uri ->
+            if (uri.scheme == "rcosmobile" && uri.host == "calls") "calls" else null
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingDeepLink.value = intent?.data?.let { uri ->
+            if (uri.scheme == "rcosmobile" && uri.host == "calls") "calls" else null
+        }
         // CRITICAL: Configure App Check with launch intent before setContent, ViewModels, or Firebase calls.
         configureAppCheck(this, intent)
         // Create the call-alerts notification channel so the phone's
@@ -163,14 +185,20 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             AuroraOneTheme {
-                RcosAppRoot()
+                RcosAppRoot(
+                    pendingDeepLink = pendingDeepLink,
+                    onDeepLinkConsumed = { pendingDeepLink.value = null }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun RcosAppRoot() {
+private fun RcosAppRoot(
+    pendingDeepLink: StateFlow<String?>,
+    onDeepLinkConsumed: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
@@ -219,6 +247,8 @@ private fun RcosAppRoot() {
             )
             AuthenticatedAuroraShell(
                 viewModel = viewModel,
+                pendingDeepLink = pendingDeepLink,
+                onDeepLinkConsumed = onDeepLinkConsumed,
                 onSignOutRequested = {
                     signOut(
                         credentialManager = credentialManager,
@@ -234,6 +264,8 @@ private fun RcosAppRoot() {
 @Composable
 private fun AuthenticatedAuroraShell(
     viewModel: MainViewModel,
+    pendingDeepLink: StateFlow<String?>,
+    onDeepLinkConsumed: () -> Unit,
     onSignOutRequested: () -> Unit
 ) {
     val localPrefs by viewModel.localPrefs.collectAsStateWithLifecycle()
@@ -271,6 +303,13 @@ private fun AuthenticatedAuroraShell(
     val onboardingAppCheckError by viewModel.onboardingAppCheckError.collectAsStateWithLifecycle()
     val onboardingDocLabel by viewModel.onboardingDocLabel.collectAsStateWithLifecycle()
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
+    // 8 fixes Nov 26 — live calls + the server's call log (item 1),
+    // the general App Check notice (item 8), and the per-user profile
+    // (item 7).
+    val liveCallsState by viewModel.liveCallsState.collectAsStateWithLifecycle()
+    val serverCallsState by viewModel.serverCallsState.collectAsStateWithLifecycle()
+    val appCheckNotice by viewModel.appCheckNotice.collectAsStateWithLifecycle()
+    val userProfileState by viewModel.userProfileState.collectAsStateWithLifecycle()
 
     // Server business re-sync on foreground (old app's PR #58,
     // visibilitychange equivalent): a redeploy can wipe the server's
@@ -297,6 +336,11 @@ private fun AuthenticatedAuroraShell(
     val teamMessages = (teamMessagesState as? UiState.Success)?.data.orEmpty()
     val agentMessages = (agentMessagesState as? UiState.Success)?.data.orEmpty()
     val auditLogs = (auditLogsState as? UiState.Success)?.data.orEmpty()
+    val liveCalls = (liveCallsState as? UiState.Success)?.data.orEmpty()
+    val liveCallsError = (liveCallsState as? UiState.Error)?.message
+    val serverCalls = (serverCallsState as? UiState.Success)?.data.orEmpty()
+    val serverCallsError = (serverCallsState as? UiState.Error)?.message
+    val userProfile = (userProfileState as? UiState.Success)?.data
 
     var showNewWorkspaceOnboarding by remember { mutableStateOf(false) }
     var dismissedEmptyOnboarding by remember { mutableStateOf(false) }
@@ -448,6 +492,17 @@ private fun AuthenticatedAuroraShell(
             }
             launchSingleTop = true
             restoreState = true
+        }
+    }
+
+    // 8 fixes Nov 26 (item 1) — a tap on the call-alert notification
+    // opens the Calls tab. Consumed once so it never re-fires on a
+    // later recomposition.
+    val deepLink by pendingDeepLink.collectAsStateWithLifecycle()
+    LaunchedEffect(deepLink) {
+        if (deepLink == "calls") {
+            navigateTopTab(CallsRoute)
+            onDeepLinkConsumed()
         }
     }
 
@@ -621,7 +676,11 @@ private fun AuthenticatedAuroraShell(
                                     onCreateJobFromDocument = { viewModel.createJobFromDocument(it) },
                                     onAddClientFromDocument = { viewModel.addClientFromDocument(it) },
                                     onToggleSpeakerphone = { viewModel.toggleLiveVoiceSpeakerphone() },
-                                    onDismissLiveVoiceError = { viewModel.dismissLiveVoiceError() }
+                                    onDismissLiveVoiceError = { viewModel.dismissLiveVoiceError() },
+                                    // 8 fixes Nov 26 (item 4) — refresh
+                                    // the thread and delete it.
+                                    onRefreshMessages = { viewModel.refreshChatMessages() },
+                                    onDeleteThread = { viewModel.deleteChatThread(aiState.selectedEmployeeId) }
                                 )
                             }
 
@@ -631,6 +690,16 @@ private fun AuthenticatedAuroraShell(
                                     calls = calls,
                                     voicemails = voicemails,
                                     liveVoiceState = liveVoiceState,
+                                    // 8 fixes Nov 26 (item 1) — live
+                                    // calls + the server's finished-call
+                                    // log, polled while this screen is
+                                    // visible.
+                                    liveCalls = liveCalls,
+                                    liveCallsError = liveCallsError,
+                                    serverCalls = serverCalls,
+                                    serverCallsError = serverCallsError,
+                                    onStartLivePolling = { viewModel.startLiveCallPolling() },
+                                    onStopLivePolling = { viewModel.stopLiveCallPolling() },
                                     onToggleAiReceptionist = { viewModel.toggleAiReceptionist(it) },
                                     onStartLiveReceptionistCall = {
                                         viewModel.startLiveVoiceConversation(employeeIdOverride = "ai_receptionist")
@@ -691,12 +760,19 @@ private fun AuthenticatedAuroraShell(
                             composable<CustomersRoute> {
                                 CustomersScreen(
                                     customers = customers,
+                                    jobs = jobs,
                                     onBack = { navController.popBackStack() },
                                     onAddCustomer = { name, company, phone, email, addr, status, svc, notes ->
                                         viewModel.addCustomer(name, company, phone, email, addr, status, svc, notes)
                                     },
                                     onUpdateCustomerStatus = { cust, status ->
                                         viewModel.updateCustomerStatus(cust, status)
+                                    },
+                                    // 8 fixes Nov 26 (item 3) — save the
+                                    // richer customer detail (contact,
+                                    // notes, custom fields).
+                                    onUpdateCustomerDetails = { cust, phone, email, addr, notes, fields ->
+                                        viewModel.updateCustomerDetails(cust, phone, email, addr, notes, fields)
                                     },
                                     onDraftFollowUp = { cust, onReady ->
                                         viewModel.draftCustomerFollowUpAndSave(cust, onReady)
@@ -733,10 +809,21 @@ private fun AuthenticatedAuroraShell(
                                     teamMessages = teamMessages,
                                     auditLogs = auditLogs,
                                     actions = actions,
+                                    userProfile = userProfile,
                                     onSwitchBusiness = { viewModel.switchBusiness(it) },
                                     onCreateNewWorkspace = { showNewWorkspaceOnboarding = true },
                                     onUpdateBusiness = { updates, msg ->
                                         viewModel.updateBusinessProfile(updates, msg)
+                                    },
+                                    // 8 fixes Nov 26 (item 7) — personal
+                                    // profile, per-user only.
+                                    onSaveUserProfile = { name, phone, email ->
+                                        viewModel.saveUserProfile(name, phone, email)
+                                    },
+                                    // 8 fixes Nov 26 (item 6) — invite a
+                                    // team member from team chat.
+                                    onAddTeamMember = { name, email, phone ->
+                                        viewModel.addTeamMember(name, email, phone)
                                     },
                                     onToggleEmployee = { id, enabled -> viewModel.toggleEmployee(id, enabled) },
                                     onSaveAgentSettings = { id, settings -> viewModel.updateAgentSettings(id, settings) },
@@ -773,6 +860,19 @@ private fun AuthenticatedAuroraShell(
                 onToggleSpeakerphone = { viewModel.toggleOutboundSpeakerphone() },
                 onDigit = { viewModel.sendOutboundDtmf(it) },
                 onClearSentDigits = { viewModel.clearOutboundSentDigits() }
+            )
+        }
+    }
+
+    // 8 fixes Nov 26 (item 8) — an App Check-protected AI call was
+    // rejected. Show the setup card with the debug token instead of
+    // the raw "Firebase App Check token is invalid." banner. The
+    // console registration itself is a separate one-time step.
+    if (appCheckNotice) {
+        Dialog(onDismissRequest = { viewModel.dismissAppCheckNotice() }) {
+            AppCheckSetupCard(
+                debugToken = viewModel.debugAppCheckToken(),
+                onDismiss = { viewModel.dismissAppCheckNotice() },
             )
         }
     }

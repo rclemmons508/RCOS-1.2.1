@@ -246,3 +246,105 @@ already had `adjustResize`). Fix: `.imePadding()` on the Assistant screen's
 root Column (same pattern as AccountScreen), so the input bar and the
 Voice/Camera/Attach pills sit above the keyboard. Phone test: AI → tap the
 message box → type — the text you are typing stays visible above the keyboard.
+
+## All-eight fixes — 470 calls alert, visible call log, richer customers, chat refresh/delete, business profile, team add, personal profile, App Check card (Nov 26)
+
+Ryan installed the PR #11 build and reported 8 things at once ("All in one build"):
+calls to +1 470 596 9505 never showed up and never alerted; the call log was buried in a
+dialog and looked bad; the customer card was bare and the follow-up button text clipped;
+the AI chat never refreshed and threads couldn't be deleted; the business profile was
+thin (no industry change, no jobs/services); team chat had no way to add anyone; his own
+personal profile with contact info was gone; the raw "Firebase App Check token is
+invalid." banner still appeared. All 8 are in this one PR, one build.
+
+1. **470-number calls show up + alert (app-side only, no server change).**
+   FCM added (`firebase-messaging` via the BoM; `google-services.json` is restored by CI
+   from the same `GOOGLE_SERVICES_JSON` secret). The token is registered on launch and on
+   every foreground return via `POST /api/push/register` — the exact contract the old app
+   uses (`src/lib/pushNotifications.ts`), so the old Railway server's `notifyCallAnswered`
+   (PR #88) sends the alert to this app's token with no server change. `notifications/
+   RcosFirebaseMessagingService` handles the `live-call` message: high-priority,
+   lock-screen-visible (`rcos_calls` channel, `VISIBILITY_PUBLIC`), tap opens Calls via
+   the `rcosmobile://calls` deep link (MainActivity is `singleTop` + `onNewIntent`),
+   deduped per room for 3h (same rule as the server). The Calls screen polls
+   `GET /api/calls/live` every 6s while visible and shows a "Live now" card while the
+   receptionist is on a call. The server's finished-call log (`GET /api/phone/calls`) is
+   merged into the app's log — it is the ONLY record of receptionist-answered calls
+   (the server writes them to its own store, not Firestore), which is why they never
+   appeared. The two sources are disjoint (the app's dialer logs outbound calls to
+   Firestore only), so no dedupe is needed. If the server can't be reached, the screen
+   says so honestly — never a fake live call or log entry.
+2. **Call log visible on the Calls screen.** The "Full Call & Receptionist Log" dialog
+   and its button are gone. The merged log (newest first, caller, status, time, duration,
+   receptionist summary when recorded) sits directly on the Calls screen under a "Call
+   Log" header with the receptionist status line (Active 24/7) and totals; the metrics
+   card counts the merged list.
+3. **Richer customer profile.** The detail is a full screen now (not a cramped dialog):
+   editable phone/email/address, a notes field, owner-defined custom fields (label +
+   value, add/remove, stored as `customFields` on the customer doc), and the customer's
+   jobs/history when the data exists (real empty state otherwise). Call/text/email
+   actions stay. The follow-up button is a full-width two-line button ("AI Draft
+   Follow-Up" / "Queues in Approvals for your review") — the old label can no longer
+   clip.
+4. **AI chat refresh + delete threads.** A refresh button in the Assistant header
+   re-subscribes the chat listener (also bumped after every send, so a just-sent message
+   shows immediately), and a delete button asks first, then removes that employee's
+   messages from Firestore (`RcosRepository.deleteChatThread`, batch delete, owner-only
+   per the rules). Never claims a message was sent until the server confirms it.
+5. **Business profile, properly.** Industry picker (all 13 presets from
+   `RcosDefaults.INDUSTRY_PRESETS` — picking one resets services to that trade's
+   defaults), a service catalog editor (name + price per service, add/remove, stored as
+   `serviceCatalog` on the business doc; `services` stays in sync with the catalog names
+   so job options follow it), and a fixed "Teach Your Team" text: the stored generic
+   SaaS copy is replaced on open with a description built from THIS business's own
+   name/industry/area/hours/services, with a "Reset to my business details" button; a
+   hand-written description is never overwritten. Company Name, Service Area/City,
+   Operating Hours stay editable.
+6. **Team chat: add members.** The thread shows the team roster and an "+ Add Member"
+   button (name + email/phone). The invite joins the business roster with no UID
+   (`members` + `memberEmails`); the server re-sync tolerates a blank userId. Owner-only.
+7. **Personal profile.** Account → My Profile: an editable name/phone/email, stored
+   per-user on `/users/{uid}` only — never on the business record, so a member can never
+   overwrite company contact info by saving their own details (the Oct 25 bug).
+8. **App Check failure surfacing.** The shared `AppCheckSetupCard` (extracted from the
+   PR #9 onboarding card — same token + Copy button + console steps) is now shown
+   everywhere an App Check-protected AI call can fail: follow-up drafts, quote drafts,
+   and direct Gemini chat set a general notice and the shell shows the card in a dialog
+   instead of the raw grey banner. The Firebase console registration is still a
+   separate one-time step (not code).
+
+- Rules: `serviceCatalog` added to the business update allowlist (+ `isValidBusiness`
+  shape check); `customFields` added to the customer update allowlist (+
+  `isValidCustomer` shape check). **After merge, publish the rules from main (same
+  Rules API flow as PR #8/#9) or the catalog/custom-field saves will be denied.**
+  `firestore.test.js` covers both new fields (owner can save them; a ghost field on a
+  customer update is still rejected).
+- Verification: static review only (no JDK/Android SDK on this VM, no Gradle build) —
+  brace/paren balance checked on every touched file, call sites grepped, duplicate
+  declarations checked, rules tests added but not run (emulator needs Java). CI is the
+  only build proof.
+
+### Phone test (all-eight fixes, after merge + install of the main APK)
+1. 470-number call: from another phone, call +1 470 596 9505 → the phone wakes with the
+   alert ("Receptionist answered a call") → tap it → the Calls tab opens → while the
+   receptionist is talking, a "Live now" card shows the caller → after hangup, the call
+   appears in the call log with the receptionist's summary. (Locked-phone test is the
+   proof for the alert.)
+2. Calls → the log is on the screen (no dialog) with the receptionist status line and
+   totals; a receptionist call from step 1 is in it.
+3. Customers → open a customer → edit phone/notes, add a custom field (e.g. Gate code /
+   0420) → Save → reopen → the field stuck; the follow-up button label is not clipped;
+   the customer's jobs show if any exist.
+4. AI → send a message → it appears without tapping anything; tap the refresh icon →
+   the thread reloads; tap the delete icon → confirm → the conversation is gone.
+5. Account → Business Profile → Change the industry (e.g. to Cleaning) → services reset
+   to that trade's defaults → add a service with a price → Save → start a job → the job
+   options follow the new services; the "Teach Your Team" text describes RC Solutions,
+   not a generic SaaS product.
+6. Account → Integrations & Team Chat → the roster shows the team → + Add Member → add
+   a name + email → they appear in the roster.
+7. Account → My Profile → edit name/phone/email → Save → the business's company contact
+   info is untouched (check Business Profile — its contact fields are unchanged).
+8. Trigger an AI call that used to show the raw App Check banner (e.g. an AI follow-up
+   draft on a customer) → the setup card with the debug token shows instead; copy the
+   token into the Firebase console once, retry, and the banner is gone for good.
