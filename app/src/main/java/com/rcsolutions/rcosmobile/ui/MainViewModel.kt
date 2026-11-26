@@ -77,7 +77,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -567,7 +566,7 @@ class MainViewModel(
     private val _serverCallsState = MutableStateFlow<UiState<List<ServerPhoneCall>>>(UiState.Success(emptyList()))
     val serverCallsState: StateFlow<UiState<List<ServerPhoneCall>>> = _serverCallsState.asStateFlow()
 
-    private var liveCallPollJob: Job? = null
+    private var liveCallPollJob: kotlinx.coroutines.Job? = null
 
     /** 8 fixes Nov 26 (item 1) — start polling the server for live
      * calls and the finished-call log (same 6s cadence as the old app).
