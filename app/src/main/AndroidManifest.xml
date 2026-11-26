@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Phase 3 — LiveKit voice routing (earpiece / speakerphone). Normal permission. -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Rework Nov 26 (item 7) — without this declaration the phone's
+         Settings → Notifications toggle for this app has nothing to
+         grant and will not stay on. Runtime permission, requested from
+         Account → Notifications on Android 13+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
         <intent>

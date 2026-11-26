@@ -376,7 +376,7 @@ service cloud.firestore {
           'emergencyAvailable', 'teamSize', 'servesResidential', 'servesCommercial',
           'contactName', 'contactPhone', 'contactEmail', 'ownerEmail',
           'autonomyMode', 'answeringMode', 'aiReceptionistEnabled', 'dollarThreshold',
-          'activeEmployees', 'employeeTones', 'availableDepartments',
+          'activeEmployees', 'employeeTones', 'agentSettings', 'availableDepartments',
           'onboardingCompleted', 'subscriptionTier',
           'memberUids', 'memberEmails', 'members', 'documentContactInfo',
           'updatedAt'

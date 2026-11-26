@@ -137,6 +137,23 @@ test("Authenticated owner can create and partially update BusinessAccount; ghost
     })
   );
 
+  // Owner can save per-agent settings (agentSettings map, added with
+  // the agent edit screen); a member cannot touch the business doc.
+  await assertSucceeds(
+    aliceDb.collection("businesses").doc("biz_1").update({
+      agentSettings: {
+        sales: {
+          permissions: ["draft_quotes", "send_messages"],
+          autoActLimit: 250,
+          escalateAbove: 1000,
+          requireApprovalForMoney: true,
+          customInstructions: "",
+        },
+      },
+      updatedAt: pastDate(900),
+    })
+  );
+
   // Reject ghost field & @DocumentId 'id'
   await assertFails(
     aliceDb.collection("businesses").doc("biz_2").set({

@@ -86,6 +86,7 @@ import com.rcsolutions.rcosmobile.data.signOut
 import com.rcsolutions.rcosmobile.model.ActionStatus
 import com.rcsolutions.rcosmobile.model.Job
 import com.rcsolutions.rcosmobile.model.UiState
+import com.rcsolutions.rcosmobile.notifications.ensureCallAlertsChannel
 import com.rcsolutions.rcosmobile.security.configureAppCheck
 import com.rcsolutions.rcosmobile.ui.MainViewModel
 import com.rcsolutions.rcosmobile.ui.components.AuroraBackground
@@ -147,6 +148,11 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         // CRITICAL: Configure App Check with launch intent before setContent, ViewModels, or Firebase calls.
         configureAppCheck(this, intent)
+        // Create the call-alerts notification channel so the phone's
+        // Settings → Notifications toggle for this app has something to
+        // grant (without a channel and the declared permission, the
+        // toggle will not stay on).
+        ensureCallAlertsChannel(this)
 
         setContent {
             AuroraOneTheme {
@@ -195,6 +201,7 @@ private fun RcosAppRoot() {
                             weatherService = WeatherService(),
                             serverApi = ServerApiClient(),
                             connectivityMonitor = ConnectivityMonitor(appContext),
+                            appContext = appContext,
                             currentUserId = uid,
                             currentUserEmail = user.email.orEmpty(),
                             currentUserName = user.displayName.orEmpty()
@@ -251,6 +258,8 @@ private fun AuthenticatedAuroraShell(
     val weeklyTrendsSyncLabel by viewModel.weeklyTrendsSyncLabel.collectAsStateWithLifecycle()
     val weeklyTrendsError by viewModel.weeklyTrendsError.collectAsStateWithLifecycle()
     val onboardingExtraction by viewModel.onboardingExtraction.collectAsStateWithLifecycle()
+    val onboardingAppCheckError by viewModel.onboardingAppCheckError.collectAsStateWithLifecycle()
+    val onboardingDocLabel by viewModel.onboardingDocLabel.collectAsStateWithLifecycle()
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
 
     val businesses = (businessesState as? UiState.Success)?.data.orEmpty()
@@ -347,8 +356,13 @@ private fun AuthenticatedAuroraShell(
             isSaving = isMutating,
             canCancel = canCancel,
             onAnalyzeInput = { text, bmp -> viewModel.analyzeOnboardingInput(text, bmp) },
+            onAnalyzeDocument = { uri, mime, name -> viewModel.analyzeOnboardingDocument(uri, mime, name) },
             onClearExtraction = { viewModel.clearOnboardingExtraction() },
-            onSaveWorkspace = { name, industryId, services, area, hours, pricing, tone, mode, threshold, emergency, knowledge ->
+            appCheckError = onboardingAppCheckError,
+            onDismissAppCheck = { viewModel.dismissAppCheckNotice() },
+            debugAppCheckToken = if (onboardingAppCheckError) viewModel.debugAppCheckToken() else null,
+            onboardingDocLabel = onboardingDocLabel,
+            onSaveWorkspace = { name, industryId, services, area, hours, pricing, tone, mode, threshold, emergency, knowledge, contactName, contactPhone, contactEmail, teamSize, servesResidential, servesCommercial ->
                 viewModel.saveNewBusiness(
                     name = name,
                     industryId = industryId,
@@ -361,6 +375,12 @@ private fun AuthenticatedAuroraShell(
                     dollarThreshold = threshold,
                     emergencyAvailable = emergency,
                     knowledgeText = knowledge,
+                    contactName = contactName,
+                    contactPhone = contactPhone,
+                    contactEmail = contactEmail,
+                    teamSize = teamSize,
+                    servesResidential = servesResidential,
+                    servesCommercial = servesCommercial,
                     onCreated = {
                         showNewWorkspaceOnboarding = false
                         dismissedEmptyOnboarding = true
@@ -677,6 +697,7 @@ private fun AuthenticatedAuroraShell(
                                 AccountScreen(
                                     ownerName = viewModel.currentUserName,
                                     ownerEmail = viewModel.currentUserEmail,
+                                    currentUserId = viewModel.currentUserId,
                                     business = activeBusiness,
                                     allBusinesses = businesses,
                                     localPrefs = localPrefs,
@@ -689,6 +710,7 @@ private fun AuthenticatedAuroraShell(
                                         viewModel.updateBusinessProfile(updates, msg)
                                     },
                                     onToggleEmployee = { id, enabled -> viewModel.toggleEmployee(id, enabled) },
+                                    onSaveAgentSettings = { id, settings -> viewModel.updateAgentSettings(id, settings) },
                                     onToggleAutomationMaster = { viewModel.toggleAutomationMaster(it) },
                                     onToggleAutomationRule = { id, enabled -> viewModel.toggleAutomationRule(id, enabled) },
                                     onSaveNotificationPrefs = { push, sound, vib, quiet ->

@@ -1,11 +1,16 @@
 package com.rcsolutions.rcosmobile.ui
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.rcsolutions.rcosmobile.data.AiRepository
+import com.rcsolutions.rcosmobile.data.DocumentInput
+import com.rcsolutions.rcosmobile.data.extractDocumentInput
+import com.rcsolutions.rcosmobile.data.isAppCheckFailure
 import com.rcsolutions.rcosmobile.data.ApiResult
 import com.rcsolutions.rcosmobile.data.AssistantDocument
 import com.rcsolutions.rcosmobile.data.ChatReply
@@ -24,9 +29,11 @@ import com.rcsolutions.rcosmobile.data.RcosDefaults
 import com.rcsolutions.rcosmobile.data.RcosRepository
 import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
 import com.rcsolutions.rcosmobile.data.WeatherService
+import com.rcsolutions.rcosmobile.security.readDebugSecret
 import com.rcsolutions.rcosmobile.model.ActionRecord
 import com.rcsolutions.rcosmobile.model.ActionStatus
 import com.rcsolutions.rcosmobile.model.AgentInboxMessage
+import com.rcsolutions.rcosmobile.model.AgentSettings
 import com.rcsolutions.rcosmobile.model.AiTaskProfile
 import com.rcsolutions.rcosmobile.model.AuditLog
 import com.rcsolutions.rcosmobile.model.AutonomyMode
@@ -101,6 +108,7 @@ class MainViewModel(
     private val weatherService: WeatherService,
     private val serverApi: ServerApiClient = ServerApiClient(),
     private val connectivityMonitor: ConnectivityMonitor? = null,
+    private val appContext: Context,
     val currentUserId: String,
     val currentUserEmail: String,
     val currentUserName: String,
@@ -490,6 +498,18 @@ class MainViewModel(
     private val _onboardingExtraction = MutableStateFlow<UiState<OnboardingExtraction>?>(null)
     val onboardingExtraction: StateFlow<UiState<OnboardingExtraction>?> = _onboardingExtraction.asStateFlow()
 
+    // True when the last AI extraction was rejected by Firebase App
+    // Check (this build's debug token was never registered in the
+    // console). The raw error tells the owner nothing, so the
+    // onboarding screen shows the setup card with the token instead.
+    // See security/AppCheckInit.readDebugSecret.
+    private val _onboardingAppCheckError = MutableStateFlow(false)
+    val onboardingAppCheckError: StateFlow<Boolean> = _onboardingAppCheckError.asStateFlow()
+
+    // Label of the document the extraction came from, e.g. "Flyer.pdf".
+    private val _onboardingDocLabel = MutableStateFlow<String?>(null)
+    val onboardingDocLabel: StateFlow<String?> = _onboardingDocLabel.asStateFlow()
+
     init {
         refreshUserProfile()
         viewModelScope.launch {
@@ -596,18 +616,76 @@ class MainViewModel(
         }
         viewModelScope.launch {
             _onboardingExtraction.value = UiState.Loading
-            aiRepo.extractOnboardingProfile(descriptionOrDoc, bitmap)
-                .onSuccess { extracted ->
-                    _onboardingExtraction.value = UiState.Success(extracted)
-                }
-                .onFailure { e ->
-                    _onboardingExtraction.value = UiState.Error(e.localizedMessage ?: "AI analysis failed.")
-                }
+            _onboardingAppCheckError.value = false
+            handleOnboardingExtraction(
+                aiRepo.extractOnboardingProfile(
+                    descriptionOrDoc,
+                    attachedBitmaps = bitmap?.let { listOf(it) } ?: emptyList()
+                )
+            )
         }
     }
 
+    /** Upload any company document (PDF, Word, image, text) and have
+     * the AI fill the onboarding sections from what it actually
+     * states. Missing fields stay empty — nothing is invented. */
+    fun analyzeOnboardingDocument(uri: Uri, mimeType: String?, displayName: String?) {
+        viewModelScope.launch {
+            _onboardingExtraction.value = UiState.Loading
+            _onboardingAppCheckError.value = false
+            when (val input = extractDocumentInput(appContext, uri, mimeType, displayName)) {
+                is DocumentInput.Unsupported -> {
+                    _onboardingExtraction.value = UiState.Error(input.reason)
+                }
+                is DocumentInput.Text -> {
+                    _onboardingDocLabel.value = input.label
+                    handleOnboardingExtraction(
+                        aiRepo.extractOnboardingProfile(descriptionOrDoc = input.text)
+                    )
+                }
+                is DocumentInput.Images -> {
+                    _onboardingDocLabel.value = input.label
+                    handleOnboardingExtraction(
+                        aiRepo.extractOnboardingProfile(
+                            descriptionOrDoc = "Company document: ${input.label}. Extract the business profile from the attached pages.",
+                            attachedBitmaps = input.bitmaps
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun handleOnboardingExtraction(result: Result<OnboardingExtraction>) {
+        result.onSuccess { extracted ->
+            _onboardingExtraction.value = UiState.Success(extracted)
+            _onboardingAppCheckError.value = false
+        }.onFailure { e ->
+            if (isAppCheckFailure(e)) {
+                // No red raw error: the setup card explains the fix
+                // and shows the token to register.
+                _onboardingExtraction.value = null
+                _onboardingAppCheckError.value = true
+            } else {
+                _onboardingExtraction.value = UiState.Error(e.localizedMessage ?: "AI analysis failed.")
+            }
+        }
+    }
+
+    fun dismissAppCheckNotice() {
+        _onboardingAppCheckError.value = false
+    }
+
+    /** The debug secret this build's App Check tokens are signed with
+     * (debug builds only, after an AI call was attempted once). Shown
+     * in-app so the owner can paste it into the Firebase console
+     * (Project Settings → App Check → Android app → Manage debug
+     * tokens). Null until the SDK has generated one. */
+    fun debugAppCheckToken(): String? = readDebugSecret(appContext)
+
     fun clearOnboardingExtraction() {
         _onboardingExtraction.value = null
+        _onboardingDocLabel.value = null
     }
 
     fun saveNewBusiness(
@@ -622,7 +700,15 @@ class MainViewModel(
         dollarThreshold: Double,
         emergencyAvailable: Boolean,
         knowledgeText: String,
-        onCreated: () -> Unit
+        onCreated: () -> Unit,
+        // Contact + team sections of the rebuilt onboarding form.
+        // Blank means "not provided" — never invented from elsewhere.
+        contactName: String = "",
+        contactPhone: String = "",
+        contactEmail: String = "",
+        teamSize: String = "",
+        servesResidential: Boolean = true,
+        servesCommercial: Boolean = false,
     ) {
         val cleanName = name.trim()
         if (cleanName.isEmpty()) {
@@ -651,8 +737,12 @@ class MainViewModel(
             emergencyAvailable = emergencyAvailable,
             activeEmployees = activeEmps,
             onboardingCompleted = true,
-            contactName = currentUserName.ifBlank { cleanName },
-            contactEmail = currentUserEmail,
+            contactName = contactName.trim().ifBlank { currentUserName.ifBlank { cleanName } },
+            contactPhone = contactPhone.trim(),
+            contactEmail = contactEmail.trim().ifBlank { currentUserEmail },
+            teamSize = teamSize.trim(),
+            servesResidential = servesResidential,
+            servesCommercial = servesCommercial,
             ownerEmail = currentUserEmail,
         )
         viewModelScope.launch {
@@ -724,6 +814,18 @@ class MainViewModel(
         val biz = activeBusiness.value ?: return
         val updated = biz.employeeTones.toMutableMap().apply { put(employeeId, tone) }
         updateBusinessProfile(mapOf("employeeTones" to updated), "Voice tone saved.")
+    }
+
+    /** Save one agent's info/permissions/thresholds (agent edit
+     * screen). Stored as agentSettings.<employeeId> on the business
+     * doc — the Firestore rules allowlist includes agentSettings, so
+     * this write passes for the owner. A failure surfaces as the
+     * normal banner, never a silent drop. */
+    fun updateAgentSettings(employeeId: String, settings: AgentSettings) {
+        updateBusinessProfile(
+            mapOf("agentSettings.$employeeId" to settings.toMap()),
+            successMsg = "Agent settings saved."
+        )
     }
 
     // Per-user profile save. This writes ONLY /users/{uid} — it never
