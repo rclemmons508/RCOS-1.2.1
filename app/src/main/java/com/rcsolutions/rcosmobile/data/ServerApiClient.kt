@@ -301,6 +301,56 @@ data class ServerBusinessSummary(
 )
 
 /**
+ * POST /api/push/register — register this device's FCM token so the
+ * old Railway server sends the receptionist-answered alert to THIS
+ * app. Same contract as the old app's registerPushToken
+ * (`src/lib/pushNotifications.ts`): the server writes the token doc
+ * to Firestore `pushTokens` (default DB) with the same shape
+ * (`{token, businessId, userId, email, platform, updatedAt}`, doc id
+ * = sha256 of the token). No server change needed.
+ */
+@Serializable
+data class PushRegisterRequest(
+    val token: String,
+    val platform: String = "android",
+    val businessId: String,
+)
+
+/** GET /api/calls/live — one live call, from the server's in-memory
+ * registry (server/liveCalls.ts). The old app polled this every 6s
+ * (`src/lib/liveCalls.ts`). `startedAt` is an ISO string. */
+@Serializable
+data class LiveCall(
+    val roomName: String = "",
+    val roomSid: String = "",
+    val callerNumber: String = "",
+    val calledNumber: String = "",
+    val callId: String = "",
+    val startedAt: String = "",
+    val status: String = "",
+    val businessId: String = "",
+)
+
+/** GET /api/phone/calls — one finished call from the server's own
+ * call log (server/inboundCallLog.ts). This is the ONLY record of
+ * receptionist-answered calls: the server writes them to its local
+ * store, not to Firestore, which is why they never appeared in this
+ * app's Firestore-only log. `timestamp` is an ISO string;
+ * `duration` is seconds. */
+@Serializable
+data class ServerPhoneCall(
+    val id: String = "",
+    val callerName: String = "",
+    val callerNumber: String = "",
+    val type: String = "",
+    val status: String = "",
+    val timestamp: String = "",
+    val duration: Int = 0,
+    val summary: String = "",
+    val answeredBy: String = "",
+)
+
+/**
  * Build the POST /api/businesses payload from the Firestore business
  * record. The gate proves membership from the verified Firebase
  * token, so the payload must name the SAME owner: ownerId is the
@@ -647,6 +697,38 @@ class ServerApiClient(
      * attempt: the dial itself surfaces the real error. */
     suspend fun fetchOutboundStatus(businessId: String): ApiResult<OutboundStatus> =
         parse(request("GET", "/api/calls/outbound-status?businessId=${encode(businessId)}", requireAuth = true))
+
+    /** POST /api/push/register — (re-)register this device's FCM
+     * token for the active business. Re-sent on every launch even if
+     * the token is unchanged (same as the old app), so a server
+     * redeploy that wipes the token store never strands the device.
+     * Any 2xx counts as registered; the body is not parsed. */
+    suspend fun registerPushToken(businessId: String, token: String): ApiResult<Unit> {
+        val encoded = json.encodeToString(
+            PushRegisterRequest.serializer(),
+            PushRegisterRequest(token = token, businessId = businessId),
+        )
+        return when (val result = request("POST", "/api/push/register", body = encoded, requireAuth = true)) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            is ApiResult.HttpError -> result
+            is ApiResult.NetworkError -> result
+        }
+    }
+
+    /** GET /api/calls/live — the calls the receptionist is handling
+     * RIGHT NOW. Polled every 6s while the Calls screen is visible
+     * (same cadence as the old app). An empty list means no live
+     * call; a failure means the server could not be reached and is
+     * surfaced by the caller, never faked as an empty list. */
+    suspend fun fetchLiveCalls(businessId: String): ApiResult<List<LiveCall>> =
+        parse(request("GET", "/api/calls/live?businessId=${encode(businessId)}", requireAuth = true))
+
+    /** GET /api/phone/calls — the server's finished-call log. This is
+     * the only place receptionist-answered calls are recorded, so the
+     * app merges this with its Firestore log. The server answers a
+     * bare JSON array. */
+    suspend fun fetchServerCallLog(businessId: String): ApiResult<List<ServerPhoneCall>> =
+        parse(request("GET", "/api/phone/calls?businessId=${encode(businessId)}", requireAuth = true))
 
     /** POST /api/calls/dial — start an outbound call. 30s timeout:
      * the server creates the room and places the SIP call before it

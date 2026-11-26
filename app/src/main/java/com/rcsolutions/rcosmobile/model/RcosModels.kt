@@ -139,6 +139,12 @@ data class BusinessAccount(
     val industry: String = "general_small_business",
     val size: String = "Solo / Small Crew",
     val services: List<String> = emptyList(),
+    // Jobs/services the business offers, with the price the owner
+    // quotes for each (free-form text, e.g. "$85" or "from $120").
+    // `services` stays in sync with the catalog names so job options
+    // keep working; the catalog is the editable source of truth.
+    // Owner-only writes (firestore.rules update allowlist).
+    val serviceCatalog: List<BusinessService> = emptyList(),
     val pricingApproach: String = "Standard market rate with clear written quotes",
     val brandTone: String = "Professional, warm, dependable",
     val businessKnowledge: String = "",
@@ -196,6 +202,7 @@ data class BusinessAccount(
             put("industry", industry.trim().take(60).ifEmpty { "general_small_business" })
             put("size", this@BusinessAccount.size.trim().take(50).ifEmpty { null })
             put("services", services.take(40))
+            put("serviceCatalog", serviceCatalog.take(40).map { it.toMap() })
             put("pricingApproach", pricingApproach.trim().take(150).ifEmpty { null })
             put("brandTone", brandTone.trim().take(150).ifEmpty { null })
             put("businessKnowledge", businessKnowledge.trim().take(8000).ifEmpty { null })
@@ -224,6 +231,33 @@ data class BusinessAccount(
             put("updatedAt", FieldValue.serverTimestamp())
         }.filterValues { it != null } as Map<String, Any>
     }
+}
+
+// One entry of a business's service catalog (name + quoted price).
+@Keep
+@IgnoreExtraProperties
+data class BusinessService(
+    val name: String = "",
+    val price: String = "",
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "name" to name.trim().take(100),
+        "price" to price.trim().take(40),
+    )
+}
+
+// One owner-defined extra field on a customer (label + value), e.g.
+// "Gate code" / "0420" or "Preferred contact" / "Text, not calls".
+@Keep
+@IgnoreExtraProperties
+data class CustomField(
+    val label: String = "",
+    val value: String = "",
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "label" to label.trim().take(60),
+        "value" to value.trim().take(500),
+    )
 }
 
 // One entry of a business's members roster (old-app shape).
@@ -530,6 +564,10 @@ data class Customer(
     val serviceType: String = "",
     val aiSummary: String = "",
     val tags: List<String> = emptyList(),
+    // Owner-defined extra fields (label + value), e.g. gate code or
+    // preferred contact method. Owner/member writes
+    // (firestore.rules update allowlist).
+    val customFields: List<CustomField> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
 ) {
@@ -560,6 +598,7 @@ data class Customer(
             put("serviceType", serviceType.trim().take(100).ifEmpty { null })
             put("aiSummary", aiSummary.trim().take(1000).ifEmpty { null })
             put("tags", tags.take(15))
+            put("customFields", customFields.take(20).map { it.toMap() })
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }.filterValues { it != null } as Map<String, Any>

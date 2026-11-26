@@ -44,10 +44,13 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.CallEnd
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -117,6 +120,9 @@ fun AiAssistantScreen(
     onAddClientFromDocument: (AssistantDocument) -> Unit,
     onToggleSpeakerphone: () -> Unit,
     onDismissLiveVoiceError: () -> Unit,
+    // 8 fixes Nov 26 (item 4) — refresh the thread and delete it.
+    onRefreshMessages: () -> Unit = {},
+    onDeleteThread: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -126,6 +132,7 @@ fun AiAssistantScreen(
     var attachedDocText by remember { mutableStateOf("") }
     var micPermissionError by remember { mutableStateOf<String?>(null) }
     var localUploadError by remember { mutableStateOf<String?>(null) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
 
@@ -313,6 +320,21 @@ fun AiAssistantScreen(
                     style = MaterialTheme.typography.labelMedium,
                     color = if (isLiveOrConnecting) AuroraRed else AuroraEmerald
                 )
+            }
+            // 8 fixes Nov 26 (item 4) — refresh the thread and delete
+            // it. The delete asks first; it removes this employee's
+            // messages from Firestore.
+            IconButton(
+                onClick = onRefreshMessages,
+                modifier = Modifier.testTag("ai_refresh_button")
+            ) {
+                Icon(Icons.Outlined.Refresh, contentDescription = "Refresh conversation", tint = AuroraTextSecondary)
+            }
+            IconButton(
+                onClick = { showDeleteConfirm = true },
+                modifier = Modifier.testTag("ai_delete_thread_button")
+            ) {
+                Icon(Icons.Outlined.Delete, contentDescription = "Delete this conversation", tint = AuroraRed)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -769,6 +791,36 @@ fun AiAssistantScreen(
                 modifier = Modifier.weight(1f)
             )
         }
+    }
+
+    // 8 fixes Nov 26 (item 4) — delete this thread, with a confirm
+    // step. Deleting removes this employee's messages from Firestore;
+    // the live listener clears them from the screen.
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            containerColor = AuroraCardElevated,
+            title = { Text("Delete this conversation?", color = AuroraTextPrimary) },
+            text = {
+                Text(
+                    text = "This removes all messages in your conversation with ${activeEmployee.name}. This can't be undone.",
+                    color = AuroraTextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDeleteThread()
+                }) {
+                    Text("Delete", color = AuroraRed)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel", color = AuroraTextSecondary)
+                }
+            }
+        )
     }
 }
 

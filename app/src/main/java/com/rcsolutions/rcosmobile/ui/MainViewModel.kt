@@ -19,7 +19,9 @@ import com.rcsolutions.rcosmobile.data.ConnectivityMonitor
 import com.rcsolutions.rcosmobile.data.DiagnosticsScan
 import com.rcsolutions.rcosmobile.data.GmailConnection
 import com.rcsolutions.rcosmobile.data.GmailOAuthStart
+import com.rcsolutions.rcosmobile.data.LiveCall
 import com.rcsolutions.rcosmobile.data.ServerApiClient
+import com.rcsolutions.rcosmobile.data.ServerPhoneCall
 import com.rcsolutions.rcosmobile.data.ServerStatus
 import com.rcsolutions.rcosmobile.data.LiveKitVoiceManager
 import com.rcsolutions.rcosmobile.data.OUTBOUND_SETUP_MESSAGE
@@ -33,6 +35,7 @@ import com.rcsolutions.rcosmobile.data.RcosRepository
 import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
 import com.rcsolutions.rcosmobile.data.WeatherService
 import com.rcsolutions.rcosmobile.data.toBusinessSyncRequest
+import com.rcsolutions.rcosmobile.notifications.registerPushTokenForBusiness
 import com.rcsolutions.rcosmobile.security.readDebugSecret
 import com.rcsolutions.rcosmobile.model.ActionRecord
 import com.rcsolutions.rcosmobile.model.ActionStatus
@@ -42,6 +45,7 @@ import com.rcsolutions.rcosmobile.model.AiTaskProfile
 import com.rcsolutions.rcosmobile.model.AuditLog
 import com.rcsolutions.rcosmobile.model.AutonomyMode
 import com.rcsolutions.rcosmobile.model.BusinessAccount
+import com.rcsolutions.rcosmobile.model.BusinessMember
 import com.rcsolutions.rcosmobile.model.CallDirection
 import com.rcsolutions.rcosmobile.model.CallRecord
 import com.rcsolutions.rcosmobile.model.CallStatus
@@ -49,6 +53,7 @@ import com.rcsolutions.rcosmobile.model.ChatMessage
 import com.rcsolutions.rcosmobile.model.Customer
 import com.rcsolutions.rcosmobile.model.CustomerRequest
 import com.rcsolutions.rcosmobile.model.CustomerStatus
+import com.rcsolutions.rcosmobile.model.CustomField
 import com.rcsolutions.rcosmobile.model.FieldTask
 import com.rcsolutions.rcosmobile.model.Invoice
 import com.rcsolutions.rcosmobile.model.Job
@@ -72,6 +77,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -125,6 +131,11 @@ class MainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LocalPrefsState())
 
     private val reloadTrigger = MutableStateFlow(0)
+
+    /** 8 fixes Nov 26 (item 4) — bumping this re-subscribes the AI
+     * chat listener, so a manual refresh (or a send) always shows the
+     * latest messages instead of a stale snapshot. */
+    private val chatReloadTrigger = MutableStateFlow(0)
 
     /** Business ids with a server re-sync in flight — the same guard
      * as the old app's `businessSyncInFlight` set, so concurrent
@@ -226,12 +237,13 @@ class MainViewModel(
         }
         .toUiStateFlow("Failed to load approvals & quotes")
 
-    val chatMessagesState: StateFlow<UiState<List<ChatMessage>>> = activeBusinessIdFlow
-        .flatMapLatest { bizId ->
-            if (bizId.isBlank()) flowOf(emptyList())
-            else repository.observeChatMessages(bizId, currentUserId)
-        }
-        .toUiStateFlow("Failed to load assistant chat")
+    val chatMessagesState: StateFlow<UiState<List<ChatMessage>>> =
+        combine(activeBusinessIdFlow, chatReloadTrigger) { bizId, _ -> bizId }
+            .flatMapLatest { bizId ->
+                if (bizId.isBlank()) flowOf(emptyList())
+                else repository.observeChatMessages(bizId, currentUserId)
+            }
+            .toUiStateFlow("Failed to load assistant chat")
 
     val teamMessagesState: StateFlow<UiState<List<TeamMessage>>> = activeBusinessIdFlow
         .flatMapLatest { bizId ->
@@ -533,6 +545,86 @@ class MainViewModel(
     private val _onboardingAppCheckError = MutableStateFlow(false)
     val onboardingAppCheckError: StateFlow<Boolean> = _onboardingAppCheckError.asStateFlow()
 
+    // 8 fixes Nov 26 (item 8) — a general App Check failure notice.
+    // Set whenever an App Check-protected AI call (follow-up draft,
+    // quote draft, direct Gemini chat) is rejected, so the shell shows
+    // the setup card with the debug token instead of the raw
+    // "Firebase App Check token is invalid." banner. The onboarding
+    // screen keeps its own, separate flag above.
+    private val _appCheckNotice = MutableStateFlow(false)
+    val appCheckNotice: StateFlow<Boolean> = _appCheckNotice.asStateFlow()
+
+    // 8 fixes Nov 26 (item 1) — live calls the receptionist is
+    // handling right now (GET /api/calls/live, polled every 6s while
+    // the Calls screen is visible) and the server's finished-call log
+    // (GET /api/phone/calls — the ONLY record of receptionist-answered
+    // calls, which the server keeps in its own store, not Firestore).
+    // Both start empty; an Error means the server could not be reached
+    // and the UI shows an honest unavailable state, never fake calls.
+    private val _liveCallsState = MutableStateFlow<UiState<List<LiveCall>>>(UiState.Success(emptyList()))
+    val liveCallsState: StateFlow<UiState<List<LiveCall>>> = _liveCallsState.asStateFlow()
+
+    private val _serverCallsState = MutableStateFlow<UiState<List<ServerPhoneCall>>>(UiState.Success(emptyList()))
+    val serverCallsState: StateFlow<UiState<List<ServerPhoneCall>>> = _serverCallsState.asStateFlow()
+
+    private var liveCallPollJob: Job? = null
+
+    /** 8 fixes Nov 26 (item 1) — start polling the server for live
+     * calls and the finished-call log (same 6s cadence as the old app).
+     * Called when the Calls screen appears; stopped when it leaves. */
+    fun startLiveCallPolling() {
+        if (liveCallPollJob?.isActive == true) return
+        liveCallPollJob = viewModelScope.launch {
+            while (true) {
+                refreshLiveCalls()
+                refreshServerCalls()
+                delay(6_000L)
+            }
+        }
+    }
+
+    fun stopLiveCallPolling() {
+        liveCallPollJob?.cancel()
+        liveCallPollJob = null
+    }
+
+    fun refreshLiveCalls() {
+        val bizId = activeBusiness.value?.id.orEmpty()
+        if (bizId.isBlank()) return
+        viewModelScope.launch {
+            when (val result = serverApi.fetchLiveCalls(bizId)) {
+                is ApiResult.Success -> _liveCallsState.value = UiState.Success(result.data)
+                is ApiResult.HttpError -> _liveCallsState.value = UiState.Error(result.message)
+                is ApiResult.NetworkError -> _liveCallsState.value = UiState.Error(result.message)
+            }
+        }
+    }
+
+    fun refreshServerCalls() {
+        val bizId = activeBusiness.value?.id.orEmpty()
+        if (bizId.isBlank()) return
+        viewModelScope.launch {
+            when (val result = serverApi.fetchServerCallLog(bizId)) {
+                is ApiResult.Success -> _serverCallsState.value = UiState.Success(result.data)
+                is ApiResult.HttpError -> _serverCallsState.value = UiState.Error(result.message)
+                is ApiResult.NetworkError -> _serverCallsState.value = UiState.Error(result.message)
+            }
+        }
+    }
+
+    /** 8 fixes Nov 26 (item 1) — (re-)register this device's FCM
+     * token for the active business so the old Railway server sends
+     * the receptionist-answered alert here. Re-sent on launch and on
+     * every foreground return, even when unchanged. Silent on failure:
+     * push registration must never surface as a user-facing error. */
+    fun registerPushToken() {
+        val bizId = activeBusiness.value?.id.orEmpty()
+        if (bizId.isBlank()) return
+        viewModelScope.launch {
+            registerPushTokenForBusiness(appContext, serverApi, bizId)
+        }
+    }
+
     // Label of the document the extraction came from, e.g. "Flyer.pdf".
     private val _onboardingDocLabel = MutableStateFlow<String?>(null)
     val onboardingDocLabel: StateFlow<String?> = _onboardingDocLabel.asStateFlow()
@@ -566,6 +658,11 @@ class MainViewModel(
                 if (biz == null || id.isBlank() || id == lastSyncedId) return@collect
                 lastSyncedId = id
                 syncBusinessToServer(biz)
+                // 8 fixes Nov 26 (item 1) — register this device's FCM
+                // token for the business so the receptionist-answered
+                // alert reaches this app. Re-sent on every business
+                // switch, even when unchanged.
+                registerPushToken()
             }
         }
         viewModelScope.launch {
@@ -679,6 +776,10 @@ class MainViewModel(
     fun onAppForegrounded() {
         val biz = activeBusiness.value ?: return
         syncBusinessToServer(biz)
+        // 8 fixes Nov 26 (item 1) — re-register the FCM token on every
+        // foreground return: a server redeploy wipes the token store,
+        // and a stale registration is the silent way the alert stops.
+        registerPushToken()
     }
 
     fun refreshOperationalFeeds() {
@@ -783,6 +884,9 @@ class MainViewModel(
 
     fun dismissAppCheckNotice() {
         _onboardingAppCheckError.value = false
+        // 8 fixes Nov 26 (item 8) — the same dismiss clears the
+        // general notice too (the shell's setup-card dialog).
+        _appCheckNotice.value = false
     }
 
     /** The debug secret this build's App Check tokens are signed with
@@ -940,13 +1044,13 @@ class MainViewModel(
     // Per-user profile save. This writes ONLY /users/{uid} — it never
     // touches the business doc, so a member can never overwrite company
     // contact info by saving their own phone/email.
-    fun saveUserProfile(phone: String, contactEmail: String) {
+    fun saveUserProfile(displayName: String, phone: String, contactEmail: String) {
         viewModelScope.launch {
             _isMutating.value = true
             val current = (_userProfileState.value as? UiState.Success)?.data
             repository.saveUserProfile(
                 UserProfile(
-                    displayName = currentUserName,
+                    displayName = displayName.trim().ifBlank { currentUserName },
                     phone = phone.trim(),
                     contactEmail = contactEmail.trim(),
                     businessIds = current?.businessIds.orEmpty()
@@ -1098,6 +1202,28 @@ class MainViewModel(
         else -> "general"
     }
 
+    /** 8 fixes Nov 26 (item 4) — re-subscribe the AI chat listener so
+     * the thread shows the latest messages. Also bumped after a send,
+     * so a message that was just saved is never left looking unsent. */
+    fun refreshChatMessages() {
+        chatReloadTrigger.value += 1
+    }
+
+    /** 8 fixes Nov 26 (item 4) — delete one AI Assistant thread (all
+     * of that employee's messages). The caller confirms first; the
+     * live listener removes the messages from the screen as they are
+     * deleted. Only the owner can delete (rules enforce it). */
+    fun deleteChatThread(employeeId: String) {
+        val biz = activeBusiness.value ?: return
+        viewModelScope.launch {
+            _isMutating.value = true
+            repository.deleteChatThread(biz.id, employeeId)
+                .onSuccess { _bannerMessage.value = "Conversation deleted." }
+                .onFailure { e -> _bannerMessage.value = e.localizedMessage ?: "Failed to delete conversation." }
+            _isMutating.value = false
+        }
+    }
+
     fun sendAiMessage(
         userPrompt: String,
         attachedDocumentText: String = "",
@@ -1140,6 +1266,10 @@ class MainViewModel(
                 text = effectivePrompt
             )
             repository.saveChatMessage(biz, userMessage)
+            // 8 fixes Nov 26 (item 4) — re-subscribe after the save so
+            // the just-sent message shows immediately instead of
+            // waiting on the listener's next snapshot.
+            refreshChatMessages()
             // Photos have no server endpoint (`POST /api/chat` is
             // text-only), so they still go through direct Gemini
             // (AiRepository) with the same per-business system prompt.
@@ -1259,11 +1389,19 @@ class MainViewModel(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "AI Assistant error", e)
-            _aiState.value = _aiState.value.copy(
-                isStreaming = false,
-                streamingText = "",
-                error = e.localizedMessage ?: "AI Assistant encountered an error."
-            )
+            // 8 fixes Nov 26 (item 8) — an App Check rejection shows
+            // the setup card with the debug token; the raw error text
+            // is never shown on the chat screen.
+            if (isAppCheckFailure(e)) {
+                _appCheckNotice.value = true
+                _aiState.value = _aiState.value.copy(isStreaming = false, streamingText = "", error = null)
+            } else {
+                _aiState.value = _aiState.value.copy(
+                    isStreaming = false,
+                    streamingText = "",
+                    error = e.localizedMessage ?: "AI Assistant encountered an error."
+                )
+            }
         }
     }
 
@@ -1709,7 +1847,13 @@ class MainViewModel(
                 }
                 .onFailure { e ->
                     _aiState.value = _aiState.value.copy(isGeneratingQuote = false)
-                    _bannerMessage.value = e.localizedMessage ?: "AI quote draft failed."
+                    // 8 fixes Nov 26 (item 8) — App Check rejection shows
+                    // the setup card, never the raw banner.
+                    if (isAppCheckFailure(e)) {
+                        _appCheckNotice.value = true
+                    } else {
+                        _bannerMessage.value = e.localizedMessage ?: "AI quote draft failed."
+                    }
                 }
         }
     }
@@ -1961,6 +2105,30 @@ class MainViewModel(
         }
     }
 
+    /** 8 fixes Nov 26 (item 3) — save the customer detail edits:
+     * contact fields, notes (`aiSummary`), and the owner-defined
+     * custom fields (label + value). Only the allowlisted fields are
+     * written, so the rules' `affectedKeys` check passes. */
+    fun updateCustomerDetails(customer: Customer, phone: String, email: String, address: String, notes: String, customFields: List<CustomField>) {
+        val biz = activeBusiness.value ?: return
+        viewModelScope.launch {
+            _isMutating.value = true
+            repository.updateCustomer(
+                biz.id,
+                customer.id,
+                mapOf(
+                    "phone" to phone.trim(),
+                    "email" to email.trim(),
+                    "address" to address.trim(),
+                    "aiSummary" to notes.trim(),
+                    "customFields" to customFields.filter { it.label.isNotBlank() }.map { it.toMap() },
+                )
+            ).onSuccess { _bannerMessage.value = "Customer updated." }
+                .onFailure { e -> _bannerMessage.value = e.localizedMessage ?: "Failed to update customer." }
+            _isMutating.value = false
+        }
+    }
+
     fun draftCustomerFollowUpAndSave(customer: Customer, onDraftReady: (String) -> Unit) {
         val biz = activeBusiness.value ?: return
         viewModelScope.launch {
@@ -1986,7 +2154,15 @@ class MainViewModel(
                     onDraftReady(draft)
                 }
                 .onFailure { e ->
-                    _bannerMessage.value = e.localizedMessage ?: "AI follow-up failed."
+                    // 8 fixes Nov 26 (item 8) — an App Check rejection
+                    // shows the setup card with the debug token, never
+                    // the raw "Firebase App Check token is invalid."
+                    // banner. Any other failure keeps the plain banner.
+                    if (isAppCheckFailure(e)) {
+                        _appCheckNotice.value = true
+                    } else {
+                        _bannerMessage.value = e.localizedMessage ?: "AI follow-up failed."
+                    }
                 }
             _isMutating.value = false
         }
@@ -2081,6 +2257,50 @@ class MainViewModel(
             repository.saveTeamMessage(biz, text)
                 .onFailure { e -> _bannerMessage.value = e.localizedMessage ?: "Failed to send team message." }
         }
+    }
+
+    /** 8 fixes Nov 26 (item 6) — invite a team member by name +
+     * email/phone. They are added to the business roster with no UID
+     * (an invite, not a signed-in account): `members` gains the entry
+     * and `memberEmails` gains the email, so they appear in the team
+     * chat roster immediately. The server re-sync tolerates a blank
+     * userId (its `sanitizeMembers` coerces it to ''). Owner-only
+     * (business updates require the owner). */
+    fun addTeamMember(name: String, email: String, phone: String) {
+        val biz = activeBusiness.value ?: return
+        if (biz.ownerId != currentUserId) {
+            _bannerMessage.value = "Only the business owner can add team members."
+            return
+        }
+        val cleanEmail = email.trim().lowercase()
+        val cleanName = name.trim()
+        if (cleanName.isBlank() || (cleanEmail.isBlank() && phone.trim().isBlank())) {
+            _bannerMessage.value = "Add a name and an email or phone number."
+            return
+        }
+        val members = biz.members + BusinessMember(
+            userId = "",
+            email = cleanEmail,
+            name = cleanName,
+            role = "member",
+        )
+        val memberEmails = biz.memberEmails.toMutableMap().apply {
+            if (cleanEmail.isNotBlank()) put(cleanEmail, "member")
+        }
+        updateBusinessProfile(
+            mapOf(
+                "members" to members.map {
+                    mapOf(
+                        "userId" to it.userId,
+                        "email" to it.email,
+                        "name" to it.name,
+                        "role" to it.role,
+                    )
+                },
+                "memberEmails" to memberEmails,
+            ),
+            successMsg = "$cleanName added to the team."
+        )
     }
 
     fun dismissAgentMessage(id: String) {
