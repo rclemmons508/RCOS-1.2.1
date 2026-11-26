@@ -49,6 +49,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,12 +65,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.rcsolutions.rcosmobile.data.OUTBOUND_SETUP_MESSAGE
+import com.rcsolutions.rcosmobile.data.OutboundStatus
 import com.rcsolutions.rcosmobile.model.BusinessAccount
 import com.rcsolutions.rcosmobile.model.CallDirection
 import com.rcsolutions.rcosmobile.model.CallRecord
 import com.rcsolutions.rcosmobile.model.CallStatus
 import com.rcsolutions.rcosmobile.model.LiveVoiceStatus
 import com.rcsolutions.rcosmobile.model.LiveVoiceUiState
+import com.rcsolutions.rcosmobile.model.OutboundCallStatus
+import com.rcsolutions.rcosmobile.model.OutboundCallUiState
 import com.rcsolutions.rcosmobile.model.VoicemailRecord
 import com.rcsolutions.rcosmobile.ui.components.AuroraCard
 import com.rcsolutions.rcosmobile.ui.components.AuroraDivider
@@ -77,6 +82,7 @@ import com.rcsolutions.rcosmobile.ui.components.AuroraEmptyState
 import com.rcsolutions.rcosmobile.ui.components.AuroraFilterPill
 import com.rcsolutions.rcosmobile.ui.components.AuroraPrimaryCta
 import com.rcsolutions.rcosmobile.ui.components.AuroraSecondaryCta
+import com.rcsolutions.rcosmobile.ui.theme.AuroraAmber
 import com.rcsolutions.rcosmobile.ui.theme.AuroraBorder
 import com.rcsolutions.rcosmobile.ui.theme.AuroraCardElevated
 import com.rcsolutions.rcosmobile.ui.theme.AuroraEmerald
@@ -104,6 +110,11 @@ fun CallsScreen(
     onStartLiveReceptionistCall: () -> Unit,
     onStopLiveReceptionistCall: () -> Unit,
     onLogCall: (callerName: String, phone: String, direction: CallDirection, status: CallStatus, duration: String, summary: String) -> Unit,
+    outboundCallState: OutboundCallUiState = OutboundCallUiState(),
+    outboundStatus: OutboundStatus? = null,
+    onRefreshOutboundStatus: () -> Unit = {},
+    onStartOutboundCall: (name: String, phone: String, note: String) -> Unit = { _, _, _ -> },
+    onDismissOutboundError: () -> Unit = {},
     onMarkVoicemailReviewed: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -113,7 +124,8 @@ fun CallsScreen(
     var showFullLogDialog by remember { mutableStateOf(false) }
     var micDeniedMessage by remember { mutableStateOf<String?>(null) }
     // Dialpad state. The call button opens the Dial & Log dialog
-    // prefilled with the dialed number — same existing path.
+    // prefilled with the dialed number — confirming it starts the
+    // in-app LiveKit call.
     var dialedNumber by remember { mutableStateOf("") }
     var dialpadPrefill by remember { mutableStateOf("") }
 
@@ -126,6 +138,31 @@ fun CallsScreen(
         } else {
             micDeniedMessage = "Microphone permission is required to talk live with the AI Receptionist."
         }
+    }
+
+    // Outbound dialer: the Dial & Log dialog's confirm starts an in-app
+    // LiveKit call (not the phone dialer). The mic permission result
+    // arrives after the dialog's values are captured, so they wait here.
+    var pendingDialName by remember { mutableStateOf("") }
+    var pendingDialPhone by remember { mutableStateOf("") }
+    var pendingDialNote by remember { mutableStateOf("") }
+    val dialMicLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            onStartOutboundCall(pendingDialName, pendingDialPhone, pendingDialNote)
+            dialedNumber = ""
+            dialpadPrefill = ""
+            showMakeCallDialog = false
+        }
+        // Denied: the dialog stays open and the user can retry. The app
+        // never pretends a call started.
+    }
+
+    // Outbound trunk status, refreshed whenever the business changes —
+    // the dialpad shows the honest setup note when it is not configured.
+    LaunchedEffect(business?.id) {
+        onRefreshOutboundStatus()
     }
 
     val aiEnabled = business?.aiReceptionistEnabled ?: true
@@ -424,10 +461,11 @@ fun CallsScreen(
             }
         }
 
-        // Dialpad — numeric keys wired into the existing Dial & Log
-        // flow. Dialing a number and tapping the call button opens the
-        // Dial & Log dialog prefilled with it; name and note stay
-        // editable there before the call is placed and logged.
+        // Dialpad — numeric keys wired into the Dial & Log flow.
+        // Dialing a number and tapping the call button opens the Dial &
+        // Log dialog prefilled with it; name and note stay editable
+        // there before the in-app call starts. The call is logged as
+        // outbound when it ends.
         DialpadCard(
             dialedNumber = dialedNumber,
             onKeyPress = { key ->
@@ -442,6 +480,36 @@ fun CallsScreen(
             },
             modifier = Modifier.fillMaxWidth()
         )
+        // Outbound dialer status: an honest setup note when the server
+        // cannot dial out, and the real error when a dial fails — never
+        // a fake connected state.
+        if (outboundStatus != null && !outboundStatus.configured) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = OUTBOUND_SETUP_MESSAGE,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AuroraAmber,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (outboundCallState.status == OutboundCallStatus.ERROR) {
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = outboundCallState.error ?: "The call could not be started.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AuroraRed,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onDismissOutboundError) {
+                    Text("Dismiss", color = AuroraTextSecondary)
+                }
+            }
+        }
         Spacer(Modifier.height(10.dp))
 
         // Bottom Dual CTAs matching Screen 3
@@ -500,11 +568,26 @@ fun CallsScreen(
                     val safeName = nameInput.trim().ifBlank { phoneInput.trim() }
                     val safePhone = phoneInput.trim()
                     if (safePhone.isNotEmpty()) {
-                        onLogCall(safeName, safePhone, CallDirection.OUTBOUND, CallStatus.COMPLETED, "2 min", notesInput)
-                        launchDialer(safePhone)
-                        dialedNumber = ""
-                        dialpadPrefill = ""
-                        showMakeCallDialog = false
+                        // In-app LiveKit call now — the phone dialer
+                        // (ACTION_DIAL) is gone from this path. The call
+                        // is logged as outbound when it ends (only when
+                        // it actually connected); nothing is logged for
+                        // a call that never connected.
+                        pendingDialName = safeName
+                        pendingDialPhone = safePhone
+                        pendingDialNote = notesInput.trim()
+                        if (ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            onStartOutboundCall(safeName, safePhone, notesInput.trim())
+                            dialedNumber = ""
+                            dialpadPrefill = ""
+                            showMakeCallDialog = false
+                        } else {
+                            dialMicLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
                     }
                 }) {
                     Text("Dial & Log", color = AuroraEmerald)
@@ -584,7 +667,8 @@ private fun CallStatCell(
 
 /** Numeric dialpad (0-9, *, #, backspace, call). The call button
  * opens the Dial & Log dialog prefilled with the dialed number —
- * the existing log + dial path, unchanged. */
+ * confirming it starts an in-app LiveKit call (not the phone dialer)
+ * and logs it as outbound when it ends. */
 @Composable
 private fun DialpadCard(
     dialedNumber: String,

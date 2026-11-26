@@ -44,6 +44,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -61,6 +62,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -76,6 +80,7 @@ import com.google.firebase.auth.auth
 import com.rcsolutions.rcosmobile.data.AiRepository
 import com.rcsolutions.rcosmobile.data.ConnectivityMonitor
 import com.rcsolutions.rcosmobile.data.LiveKitVoiceManager
+import com.rcsolutions.rcosmobile.data.OutboundCallManager
 import com.rcsolutions.rcosmobile.data.RcosRepository
 import com.rcsolutions.rcosmobile.data.ServerApiClient
 import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
@@ -85,6 +90,7 @@ import com.rcsolutions.rcosmobile.data.authStateFlow
 import com.rcsolutions.rcosmobile.data.signOut
 import com.rcsolutions.rcosmobile.model.ActionStatus
 import com.rcsolutions.rcosmobile.model.Job
+import com.rcsolutions.rcosmobile.model.OutboundCallStatus
 import com.rcsolutions.rcosmobile.model.UiState
 import com.rcsolutions.rcosmobile.notifications.ensureCallAlertsChannel
 import com.rcsolutions.rcosmobile.security.configureAppCheck
@@ -100,6 +106,7 @@ import com.rcsolutions.rcosmobile.ui.screens.AccountScreen
 import com.rcsolutions.rcosmobile.ui.screens.AiAssistantScreen
 import com.rcsolutions.rcosmobile.ui.screens.AuthScreen
 import com.rcsolutions.rcosmobile.ui.screens.CallsScreen
+import com.rcsolutions.rcosmobile.ui.screens.OutboundCallOverlay
 import com.rcsolutions.rcosmobile.ui.screens.CustomersScreen
 import com.rcsolutions.rcosmobile.ui.screens.HomeScreen
 import com.rcsolutions.rcosmobile.ui.screens.OnboardingScreen
@@ -198,6 +205,7 @@ private fun RcosAppRoot() {
                             prefsRepo = UserPreferencesRepository(appContext),
                             aiRepo = AiRepository(),
                             liveKitVoiceManager = LiveKitVoiceManager(appContext),
+                            outboundCallManager = OutboundCallManager(appContext),
                             weatherService = WeatherService(),
                             serverApi = ServerApiClient(),
                             connectivityMonitor = ConnectivityMonitor(appContext),
@@ -244,6 +252,8 @@ private fun AuthenticatedAuroraShell(
     val auditLogsState by viewModel.auditLogsState.collectAsStateWithLifecycle()
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
     val liveVoiceState by viewModel.liveVoiceState.collectAsStateWithLifecycle()
+    val outboundCallState by viewModel.outboundCallState.collectAsStateWithLifecycle()
+    val outboundStatus by viewModel.outboundStatus.collectAsStateWithLifecycle()
     val documents by viewModel.documents.collectAsStateWithLifecycle()
     val attachedDocumentIds by viewModel.attachedDocumentIds.collectAsStateWithLifecycle()
     val isUploadingDocument by viewModel.isUploadingDocument.collectAsStateWithLifecycle()
@@ -261,6 +271,20 @@ private fun AuthenticatedAuroraShell(
     val onboardingAppCheckError by viewModel.onboardingAppCheckError.collectAsStateWithLifecycle()
     val onboardingDocLabel by viewModel.onboardingDocLabel.collectAsStateWithLifecycle()
     val bannerMessage by viewModel.bannerMessage.collectAsStateWithLifecycle()
+
+    // Server business re-sync on foreground (old app's PR #58,
+    // visibilitychange equivalent): a redeploy can wipe the server's
+    // business store while the app sits backgrounded. ON_RESUME
+    // re-checks the active business and re-saves it if the server
+    // lost it — silent and best-effort, never a UI error.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.onAppForegrounded()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val businesses = (businessesState as? UiState.Success)?.data.orEmpty()
     val jobs = (jobsState as? UiState.Success)?.data.orEmpty()
@@ -615,6 +639,11 @@ private fun AuthenticatedAuroraShell(
                                     onLogCall = { name, phone, dir, status, duration, summary ->
                                         viewModel.logCall(name, phone, dir, status, duration, summary)
                                     },
+                                    outboundCallState = outboundCallState,
+                                    outboundStatus = outboundStatus,
+                                    onRefreshOutboundStatus = { viewModel.refreshOutboundStatus() },
+                                    onStartOutboundCall = { name, phone, note -> viewModel.startOutboundCall(name, phone, note) },
+                                    onDismissOutboundError = { viewModel.dismissOutboundError() },
                                     onMarkVoicemailReviewed = { viewModel.markVoicemailReviewed(it) }
                                 )
                             }
@@ -729,6 +758,22 @@ private fun AuthenticatedAuroraShell(
                     }
                 }
             }
+        }
+        // Outbound call overlay (LiveKit dialer): full-screen, above the
+        // Scaffold (covers the bottom nav too), below transient dialogs.
+        // Rendered here — not inside CallsScreen — so it stays up even
+        // if the user leaves the Calls tab mid-call.
+        if (outboundCallState.status == OutboundCallStatus.DIALING ||
+            outboundCallState.status == OutboundCallStatus.CONNECTED
+        ) {
+            OutboundCallOverlay(
+                state = outboundCallState,
+                onEndCall = { viewModel.endOutboundCall() },
+                onToggleMute = { viewModel.toggleOutboundMute() },
+                onToggleSpeakerphone = { viewModel.toggleOutboundSpeakerphone() },
+                onDigit = { viewModel.sendOutboundDtmf(it) },
+                onClearSentDigits = { viewModel.clearOutboundSentDigits() }
+            )
         }
     }
 
