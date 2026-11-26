@@ -1,6 +1,7 @@
 package com.rcsolutions.rcosmobile.data
 
 import com.rcsolutions.rcosmobile.model.AIEmployee
+import com.rcsolutions.rcosmobile.model.AgentSettings
 import com.rcsolutions.rcosmobile.model.AutomationRule
 import com.rcsolutions.rcosmobile.model.IndustryPreset
 import com.rcsolutions.rcosmobile.model.JobPackTemplate
@@ -202,6 +203,59 @@ object RcosDefaults {
             enabled = true
         )
     )
+
+    // ---- AI agent permissions & thresholds (Agent edit screen) ----
+    // What each agent is allowed to do. Stored per agent on the
+    // business doc (agentSettings); these are the defaults an agent
+    // gets before the owner edits it — nothing is invented per user,
+    // the same catalog applies to every business.
+    data class AgentPermission(val id: String, val label: String, val description: String)
+
+    val AGENT_PERMISSIONS = listOf(
+        AgentPermission("draft_quotes", "Draft quotes & estimates", "Prepare itemized quotes for owner approval."),
+        AgentPermission("send_messages", "Message customers", "Send reminders, follow-ups, and updates to customers."),
+        AgentPermission("create_jobs", "Create & schedule jobs", "Turn approved work into scheduled jobs."),
+        AgentPermission("answer_calls", "Answer & route calls", "Greet callers, capture requests, route urgent calls."),
+        AgentPermission("manage_invoices", "Draft invoices", "Prepare invoices and track unpaid balances."),
+        AgentPermission("manage_customers", "Manage customers", "Add and update customer records."),
+        AgentPermission("book_appointments", "Book appointments", "Offer and book available time slots."),
+        AgentPermission("read_documents", "Read company documents", "Use uploaded company files as ground truth."),
+    )
+
+    private val AGENT_DEFAULT_PERMISSIONS: Map<String, List<String>> = mapOf(
+        "executive_assistant" to listOf("draft_quotes", "send_messages", "create_jobs", "manage_invoices", "manage_customers", "book_appointments", "read_documents"),
+        "ai_receptionist" to listOf("answer_calls", "send_messages", "book_appointments", "read_documents"),
+        "sales" to listOf("draft_quotes", "send_messages", "manage_customers", "book_appointments", "read_documents"),
+        "operations" to listOf("create_jobs", "book_appointments", "send_messages", "read_documents"),
+        "customer_service" to listOf("send_messages", "manage_customers", "book_appointments", "read_documents"),
+        "technician" to listOf("create_jobs", "read_documents"),
+        "finance" to listOf("manage_invoices", "send_messages", "read_documents"),
+        "marketing" to listOf("send_messages", "read_documents"),
+        "project_manager" to listOf("create_jobs", "send_messages", "manage_customers", "read_documents"),
+        "admin" to listOf("manage_customers", "read_documents"),
+        "hr" to listOf("send_messages", "read_documents"),
+        "business_analyst" to listOf("read_documents"),
+        "automation_specialist" to listOf("send_messages", "read_documents"),
+        "systems_engineer" to listOf("read_documents"),
+        "ceo_assistant" to listOf("draft_quotes", "send_messages", "read_documents"),
+    )
+
+    /** Settings an agent gets before the owner edits it. The business
+     * doc stores overrides only — a business with no stored entry for
+     * an agent reads exactly this. */
+    fun defaultAgentSettings(employeeId: String): AgentSettings = AgentSettings(
+        permissions = AGENT_DEFAULT_PERMISSIONS[employeeId]
+            ?: listOf("send_messages", "read_documents"),
+        autoActLimit = 250.0,
+        escalateAbove = 1000.0,
+        requireApprovalForMoney = true,
+        customInstructions = "",
+    )
+
+    /** A business's stored settings for an agent, or the defaults when
+     * the owner has never edited that agent. */
+    fun agentSettingsFor(business: com.rcsolutions.rcosmobile.model.BusinessAccount?, employeeId: String): AgentSettings =
+        business?.agentSettings?.get(employeeId) ?: defaultAgentSettings(employeeId)
 
     private val defaultSuggestedEmployees = listOf(
         "executive_assistant", "ai_receptionist", "sales", "operations",

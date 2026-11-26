@@ -27,6 +27,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Backspace
+import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.CallEnd
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.HeadsetMic
@@ -35,8 +37,10 @@ import androidx.compose.material.icons.outlined.PhoneCallback
 import androidx.compose.material.icons.outlined.PhoneMissed
 import androidx.compose.material.icons.outlined.Voicemail
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -55,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -107,6 +112,10 @@ fun CallsScreen(
     var showMakeCallDialog by remember { mutableStateOf(false) }
     var showFullLogDialog by remember { mutableStateOf(false) }
     var micDeniedMessage by remember { mutableStateOf<String?>(null) }
+    // Dialpad state. The call button opens the Dial & Log dialog
+    // prefilled with the dialed number — same existing path.
+    var dialedNumber by remember { mutableStateOf("") }
+    var dialpadPrefill by remember { mutableStateOf("") }
 
     val micLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -359,7 +368,7 @@ fun CallsScreen(
                         title = "No calls logged yet",
                         subtitle = "Tap + Make a Call below to dial a customer via your phone app and log the outcome.",
                         actionLabel = "+ Make a Call",
-                        onActionClick = { showMakeCallDialog = true }
+                        onActionClick = { dialpadPrefill = ""; showMakeCallDialog = true }
                     )
                 }
             } else {
@@ -415,12 +424,32 @@ fun CallsScreen(
             }
         }
 
+        // Dialpad — numeric keys wired into the existing Dial & Log
+        // flow. Dialing a number and tapping the call button opens the
+        // Dial & Log dialog prefilled with it; name and note stay
+        // editable there before the call is placed and logged.
+        DialpadCard(
+            dialedNumber = dialedNumber,
+            onKeyPress = { key ->
+                if (dialedNumber.length < 15) dialedNumber += key
+            },
+            onBackspace = {
+                if (dialedNumber.isNotEmpty()) dialedNumber = dialedNumber.dropLast(1)
+            },
+            onCall = {
+                dialpadPrefill = dialedNumber
+                showMakeCallDialog = true
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(10.dp))
+
         // Bottom Dual CTAs matching Screen 3
         AuroraPrimaryCta(
             text = "Make a Call",
             icon = Icons.Outlined.Add,
             testTag = "calls_make_call_button",
-            onClick = { showMakeCallDialog = true }
+            onClick = { dialpadPrefill = ""; showMakeCallDialog = true }
         )
         Spacer(Modifier.height(8.dp))
         AuroraSecondaryCta(
@@ -432,7 +461,9 @@ fun CallsScreen(
 
     if (showMakeCallDialog) {
         var nameInput by remember { mutableStateOf("") }
-        var phoneInput by remember { mutableStateOf("") }
+        // Prefilled with the dialpad number when the call started
+        // there; blank when opened from Make a Call.
+        var phoneInput by remember { mutableStateOf(dialpadPrefill) }
         var notesInput by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showMakeCallDialog = false },
@@ -471,6 +502,8 @@ fun CallsScreen(
                     if (safePhone.isNotEmpty()) {
                         onLogCall(safeName, safePhone, CallDirection.OUTBOUND, CallStatus.COMPLETED, "2 min", notesInput)
                         launchDialer(safePhone)
+                        dialedNumber = ""
+                        dialpadPrefill = ""
                         showMakeCallDialog = false
                     }
                 }) {
@@ -545,6 +578,108 @@ private fun CallStatCell(
             text = label,
             style = MaterialTheme.typography.labelSmall,
             color = AuroraTextSecondary
+        )
+    }
+}
+
+/** Numeric dialpad (0-9, *, #, backspace, call). The call button
+ * opens the Dial & Log dialog prefilled with the dialed number —
+ * the existing log + dial path, unchanged. */
+@Composable
+private fun DialpadCard(
+    dialedNumber: String,
+    onKeyPress: (String) -> Unit,
+    onBackspace: () -> Unit,
+    onCall: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AuroraCard(modifier = modifier) {
+        Text(
+            text = dialedNumber.ifBlank { "Enter a number" },
+            style = MaterialTheme.typography.headlineSmall,
+            color = if (dialedNumber.isBlank()) AuroraTextMuted else AuroraTextPrimary,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().testTag("dialpad_number_display")
+        )
+        Spacer(Modifier.height(10.dp))
+        listOf(
+            listOf("1", "2", "3"),
+            listOf("4", "5", "6"),
+            listOf("7", "8", "9"),
+            listOf("*", "0", "#")
+        ).forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                row.forEach { key ->
+                    DialpadKey(label = key, onClick = { onKeyPress(key) })
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onBackspace,
+                enabled = dialedNumber.isNotEmpty(),
+                modifier = Modifier.size(56.dp).testTag("dialpad_backspace")
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Backspace,
+                    contentDescription = "Delete last digit",
+                    tint = if (dialedNumber.isNotEmpty()) AuroraTextSecondary else AuroraTextMuted
+                )
+            }
+            Button(
+                onClick = onCall,
+                enabled = dialedNumber.isNotBlank(),
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AuroraEmerald,
+                    contentColor = AuroraOnEmerald,
+                    disabledContainerColor = AuroraEmerald.copy(alpha = 0.35f)
+                ),
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier.size(64.dp).testTag("dialpad_call_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Call,
+                    contentDescription = "Call",
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+            // Balances the backspace button so the call button stays centered.
+            Spacer(Modifier.size(56.dp))
+        }
+    }
+}
+
+@Composable
+private fun DialpadKey(
+    label: String,
+    onClick: () -> Unit
+) {
+    OutlinedButton(
+        onClick = onClick,
+        shape = CircleShape,
+        border = BorderStroke(1.dp, AuroraBorder),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = AuroraCardElevated,
+            contentColor = AuroraTextPrimary
+        ),
+        contentPadding = PaddingValues(0.dp),
+        modifier = Modifier.size(64.dp).testTag("dialpad_key_$label")
+    ) {
+        Text(
+            text = label,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Medium
         )
     }
 }

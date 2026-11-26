@@ -159,6 +159,9 @@ data class BusinessAccount(
     val dollarThreshold: Double = 250.0,
     val activeEmployees: Map<String, Boolean> = emptyMap(),
     val employeeTones: Map<String, String> = emptyMap(),
+    // Per-agent info/permissions/thresholds, keyed by employee id.
+    // Owner-only writes (firestore.rules update allowlist).
+    val agentSettings: Map<String, AgentSettings> = emptyMap(),
     val availableDepartments: List<String> = listOf("sales", "support", "billing", "dispatch", "emergency"),
     val onboardingCompleted: Boolean = false,
     val subscriptionTier: String = "Pro Plan",
@@ -213,6 +216,7 @@ data class BusinessAccount(
             put("dollarThreshold", dollarThreshold.coerceIn(0.0, 1_000_000.0))
             put("activeEmployees", activeEmployees)
             put("employeeTones", employeeTones)
+            put("agentSettings", agentSettings.mapValues { it.value.toMap() })
             put("availableDepartments", availableDepartments.take(10))
             put("onboardingCompleted", onboardingCompleted)
             put("subscriptionTier", subscriptionTier.trim().take(40).ifEmpty { "Pro Plan" })
@@ -772,6 +776,34 @@ data class AuditLog(
     @ServerTimestamp val createdAt: Timestamp? = null,
 )
 
+// Per-agent settings, stored on the business doc as
+// agentSettings: { employeeId: AgentSettings }. Read-time defaults
+// come from RcosDefaults.defaultAgentSettings when an agent has no
+// stored entry yet — nothing is seeded, so a business with no edits
+// keeps an honest empty map.
+@Keep
+@IgnoreExtraProperties
+data class AgentSettings(
+    // Permission ids from RcosDefaults.AGENT_PERMISSIONS.
+    val permissions: List<String> = emptyList(),
+    // The agent may act on its own under this dollar amount.
+    val autoActLimit: Double = 250.0,
+    // Above this dollar amount the agent must escalate to the owner.
+    val escalateAbove: Double = 1000.0,
+    // Money movement (invoices, payments) always needs owner approval.
+    val requireApprovalForMoney: Boolean = true,
+    // Owner-written guidance shown to this agent.
+    val customInstructions: String = "",
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "permissions" to permissions.take(20),
+        "autoActLimit" to autoActLimit.coerceIn(0.0, 1_000_000.0),
+        "escalateAbove" to escalateAbove.coerceIn(0.0, 1_000_000.0),
+        "requireApprovalForMoney" to requireApprovalForMoney,
+        "customInstructions" to customInstructions.trim().take(2000),
+    )
+}
+
 data class AIEmployee(
     val id: String,
     val name: String,
@@ -829,6 +861,14 @@ data class OnboardingExtraction(
     val pricingApproach: String = "",
     val brandTone: String = "",
     val emergencyAvailable: Boolean = false,
+    // Contact + team fields the document may state. Absent in the
+    // document means empty/false here — never invented.
+    val contactName: String = "",
+    val contactPhone: String = "",
+    val contactEmail: String = "",
+    val teamSize: String = "",
+    val servesResidential: Boolean = true,
+    val servesCommercial: Boolean = false,
 )
 
 data class QuoteDraftSuggestion(

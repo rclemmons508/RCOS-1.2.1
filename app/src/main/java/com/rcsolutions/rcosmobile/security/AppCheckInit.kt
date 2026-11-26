@@ -67,3 +67,30 @@ fun configureAppCheck(context: Context, intent: Intent?) {
         Log.e(TAG, "Failed to initialize Firebase App Check", e)
     }
 }
+
+/**
+ * The debug secret this build's App Check tokens are signed with.
+ * Debug builds only. The Firebase console must have this exact value
+ * registered (Project Settings → App Check → the Android app →
+ * Manage debug tokens → Add debug token) or Firebase AI Logic, which
+ * is Basic Enforced, rejects every token with "Firebase App Check
+ * token is invalid." The SDK generates the secret on first use and
+ * stores it here, so it only exists after an AI call has been
+ * attempted once — null before that.
+ *
+ * The secret is shown in-app (debug builds only, to the signed-in
+ * owner) so it can be copied into the console without adb/Logcat. It
+ * is a debug-only token: it grants App Check tokens for this debug
+ * build alone and is never a production credential. It is never
+ * written to Firestore, never sent to the server, and never committed.
+ */
+fun readDebugSecret(context: Context): String? {
+    if (!BuildConfig.DEBUG) return null
+    return runCatching {
+        val persistenceKey = FirebaseApp.getInstance().persistenceKey
+        context.getSharedPreferences(
+            "$DEBUG_STORE_PREFIX$persistenceKey",
+            Context.MODE_PRIVATE
+        ).getString(DEBUG_SECRET_KEY, null)?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+}

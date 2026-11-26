@@ -2,8 +2,10 @@ package com.rcsolutions.rcosmobile.ui.screens
 
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -52,8 +55,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.rcsolutions.rcosmobile.data.RcosDefaults
@@ -83,7 +88,16 @@ fun OnboardingScreen(
     isSaving: Boolean,
     canCancel: Boolean,
     onAnalyzeInput: (String, Bitmap?) -> Unit,
+    onAnalyzeDocument: (Uri, String?, String?) -> Unit,
     onClearExtraction: () -> Unit,
+    // App Check setup card: true when the last AI call was rejected
+    // because this build's debug token isn't registered in the console.
+    appCheckError: Boolean,
+    onDismissAppCheck: () -> Unit,
+    // The debug token to register (null until the SDK generates one).
+    debugAppCheckToken: String?,
+    // Label of the document the last extraction came from, if any.
+    onboardingDocLabel: String?,
     onSaveWorkspace: (
         name: String,
         industryId: String,
@@ -95,14 +109,22 @@ fun OnboardingScreen(
         autonomyMode: AutonomyMode,
         dollarThreshold: Double,
         emergencyAvailable: Boolean,
-        knowledgeText: String
+        knowledgeText: String,
+        contactName: String,
+        contactPhone: String,
+        contactEmail: String,
+        teamSize: String,
+        servesResidential: Boolean,
+        servesCommercial: Boolean
     ) -> Unit,
     onCancel: () -> Unit,
 ) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     var step by remember { mutableIntStateOf(1) }
     var docOrDescription by remember { mutableStateOf("") }
     var attachedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var attachedDocLabel by remember { mutableStateOf<String?>(null) }
 
     var businessName by remember { mutableStateOf("") }
     var selectedIndustryId by remember { mutableStateOf("general_small_business") }
@@ -112,6 +134,18 @@ fun OnboardingScreen(
     var pricingApproach by remember { mutableStateOf("Written quote upfront with clear scope") }
     var brandTone by remember { mutableStateOf("Friendly, punctual, and safety-focused") }
     var emergencyAvailable by remember { mutableStateOf(true) }
+    // Which document the visible sections were filled from. Captured
+    // locally on extraction success because the ViewModel clears its
+    // label when the extraction state is cleared right after.
+    var filledFromDoc by remember { mutableStateOf<String?>(null) }
+    // Contact + team sections — filled by the AI extraction when the
+    // document states them, otherwise typed in by hand.
+    var contactName by remember { mutableStateOf("") }
+    var contactPhone by remember { mutableStateOf("") }
+    var contactEmail by remember { mutableStateOf("") }
+    var teamSize by remember { mutableStateOf("") }
+    var servesResidential by remember { mutableStateOf(true) }
+    var servesCommercial by remember { mutableStateOf(false) }
     var autonomyMode by remember { mutableStateOf(AutonomyMode.SUPERVISED) }
     var dollarThreshold by remember { mutableDoubleStateOf(250.0) }
 
@@ -130,6 +164,25 @@ fun OnboardingScreen(
         }
     }
 
+    // Any company document: PDF, Word (.docx), text, CSV, or image.
+    // The AI reads it and fills the sections below — only with what
+    // the document actually states.
+    val documentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val displayName = runCatching {
+                context.contentResolver.query(
+                    uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
+            }.getOrNull()
+            attachedDocLabel = displayName ?: "Document"
+            onAnalyzeDocument(uri, context.contentResolver.getType(uri), displayName)
+        }
+    }
+
     LaunchedEffect(extractionState) {
         if (extractionState is UiState.Success) {
             val ext = extractionState.data
@@ -141,6 +194,14 @@ fun OnboardingScreen(
             if (ext.pricingApproach.isNotBlank()) pricingApproach = ext.pricingApproach
             if (ext.brandTone.isNotBlank()) brandTone = ext.brandTone
             emergencyAvailable = ext.emergencyAvailable
+            // Contact + team: fill only what the document stated.
+            if (ext.contactName.isNotBlank()) contactName = ext.contactName
+            if (ext.contactPhone.isNotBlank()) contactPhone = ext.contactPhone
+            if (ext.contactEmail.isNotBlank()) contactEmail = ext.contactEmail
+            if (ext.teamSize.isNotBlank()) teamSize = ext.teamSize
+            servesResidential = ext.servesResidential
+            servesCommercial = ext.servesCommercial
+            filledFromDoc = onboardingDocLabel
             step = 2
             onClearExtraction()
         }
@@ -192,11 +253,78 @@ fun OnboardingScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "Welcome, ${defaultOwnerName.ifBlank { "Owner" }}. Tell Gemini about your services or attach a flyer to auto-fill, or skip straight to picking your trade.",
+                        text = "Welcome, ${defaultOwnerName.ifBlank { "Owner" }}. Upload any company document or paste your details and let Gemini fill in the sections — or skip straight to picking your trade and type everything in by hand.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AuroraTextSecondary
                     )
                     Spacer(Modifier.height(16.dp))
+
+                    // App Check setup card — shown only when the AI call
+                    // was rejected because this build's debug token was
+                    // never registered in the Firebase console. The token
+                    // is shown here so it can be copied into the console
+                    // without adb or Logcat; manual entry still works.
+                    if (appCheckError) {
+                        AuroraCard(highlighted = true) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Warning, contentDescription = null, tint = AuroraRed)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "AI setup needed — one-time step",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = AuroraTextPrimary
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Firebase AI is blocked because this build's debug token isn't registered in the Firebase console. Register it once, then tap \"Extract Details with AI\" again.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AuroraTextSecondary
+                            )
+                            if (debugAppCheckToken != null) {
+                                Spacer(Modifier.height(10.dp))
+                                OutlinedTextField(
+                                    value = debugAppCheckToken,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Debug token — copy into the Firebase console") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = auroraFieldColors()
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    AuroraSecondaryCta(
+                                        text = "Copy token",
+                                        testTag = "onboarding_copy_appcheck_token",
+                                        onClick = { clipboard.setText(AnnotatedString(debugAppCheckToken)) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = onDismissAppCheck) {
+                                        Text("Dismiss", color = AuroraTextSecondary)
+                                    }
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = "In the Firebase console: Project Settings → App Check → this Android app → Manage debug tokens → Add debug token → paste this value → Save.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AuroraTextMuted
+                                )
+                            } else {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = "The token appears here after an AI call is attempted. Tap \"Extract Details with AI\" once, then come back to this screen to copy it.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AuroraTextSecondary
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                TextButton(onClick = onDismissAppCheck) {
+                                    Text("Dismiss", color = AuroraTextSecondary)
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                    }
 
                     AuroraCard(highlighted = true) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -236,6 +364,30 @@ fun OnboardingScreen(
                                 },
                                 modifier = Modifier.weight(1f)
                             )
+                            AuroraSecondaryCta(
+                                text = "Upload Document",
+                                testTag = "onboarding_attach_document",
+                                onClick = {
+                                    documentPickerLauncher.launch(
+                                        arrayOf(
+                                            "application/pdf",
+                                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                            "text/plain",
+                                            "text/csv",
+                                            "image/*"
+                                        )
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (attachedDocLabel != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Document attached: $attachedDocLabel",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AuroraEmerald
+                            )
                         }
                         if (extractionState is UiState.Error) {
                             Spacer(Modifier.height(8.dp))
@@ -271,12 +423,23 @@ fun OnboardingScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "Confirm or edit your details before launching.",
+                        text = "Confirm or edit your details before launching. Anything the document didn't state is left blank for you to fill in — nothing is guessed.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AuroraTextSecondary
                     )
+                    if (filledFromDoc != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Filled in from $filledFromDoc — check anything the document didn't state.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraEmerald
+                        )
+                    }
                     Spacer(Modifier.height(14.dp))
 
+                    // ---- Business ----
+                    Text("Business", style = MaterialTheme.typography.titleMedium, color = AuroraTextPrimary)
+                    Spacer(Modifier.height(8.dp))
                     AuroraCard {
                         OutlinedTextField(
                             value = businessName,
@@ -345,6 +508,112 @@ fun OnboardingScreen(
                             modifier = Modifier.fillMaxWidth(),
                             colors = auroraFieldColors()
                         )
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    // ---- Contact ----
+                    Text("Contact", style = MaterialTheme.typography.titleMedium, color = AuroraTextPrimary)
+                    Spacer(Modifier.height(8.dp))
+                    AuroraCard {
+                        OutlinedTextField(
+                            value = contactName,
+                            onValueChange = { contactName = it },
+                            label = { Text("Contact Name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("onboarding_contact_name_input"),
+                            colors = auroraFieldColors()
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = contactPhone,
+                            onValueChange = { contactPhone = it },
+                            label = { Text("Business Phone") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("onboarding_contact_phone_input"),
+                            colors = auroraFieldColors()
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = contactEmail,
+                            onValueChange = { contactEmail = it },
+                            label = { Text("Business Email") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("onboarding_contact_email_input"),
+                            colors = auroraFieldColors()
+                        )
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    // ---- Prices & rates ----
+                    Text("Prices & Rates", style = MaterialTheme.typography.titleMedium, color = AuroraTextPrimary)
+                    Spacer(Modifier.height(8.dp))
+                    AuroraCard {
+                        OutlinedTextField(
+                            value = pricingApproach,
+                            onValueChange = { pricingApproach = it },
+                            label = { Text("Pricing Approach / Rates") },
+                            placeholder = { Text("e.g. $85/hr, flat $250 per visit") },
+                            minLines = 2,
+                            modifier = Modifier.fillMaxWidth().testTag("onboarding_pricing_input"),
+                            colors = auroraFieldColors()
+                        )
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    // ---- Team & coverage ----
+                    Text("Team & Coverage", style = MaterialTheme.typography.titleMedium, color = AuroraTextPrimary)
+                    Spacer(Modifier.height(8.dp))
+                    AuroraCard {
+                        OutlinedTextField(
+                            value = teamSize,
+                            onValueChange = { teamSize = it },
+                            label = { Text("Team Size") },
+                            placeholder = { Text("e.g. Just me, 3 crew, 12 staff") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("onboarding_team_size_input"),
+                            colors = auroraFieldColors()
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Serves Residential", style = MaterialTheme.typography.titleSmall, color = AuroraTextPrimary)
+                                Text("Homeowners and households.", style = MaterialTheme.typography.bodyMedium, color = AuroraTextMuted)
+                            }
+                            Switch(
+                                checked = servesResidential,
+                                onCheckedChange = { servesResidential = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = AuroraOnEmerald,
+                                    checkedTrackColor = AuroraEmerald
+                                )
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Serves Commercial", style = MaterialTheme.typography.titleSmall, color = AuroraTextPrimary)
+                                Text("Businesses and properties.", style = MaterialTheme.typography.bodyMedium, color = AuroraTextMuted)
+                            }
+                            Switch(
+                                checked = servesCommercial,
+                                onCheckedChange = { servesCommercial = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = AuroraOnEmerald,
+                                    checkedTrackColor = AuroraEmerald
+                                )
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(14.dp))
@@ -467,7 +736,13 @@ fun OnboardingScreen(
                                     autonomyMode,
                                     dollarThreshold,
                                     emergencyAvailable,
-                                    docOrDescription
+                                    docOrDescription,
+                                    contactName,
+                                    contactPhone,
+                                    contactEmail,
+                                    teamSize,
+                                    servesResidential,
+                                    servesCommercial
                                 )
                             },
                             modifier = Modifier.weight(1.5f)

@@ -54,9 +54,17 @@ class AiRepository {
                 "businessHours" to Schema.string(description = "Operating hours"),
                 "pricingApproach" to Schema.string(description = "Pricing model or rate notes"),
                 "brandTone" to Schema.string(description = "Communication tone"),
-                "emergencyAvailable" to Schema.boolean(description = "Whether emergency service is offered")
+                "emergencyAvailable" to Schema.boolean(description = "Whether emergency service is offered"),
+                // Contact + team fields. Only what the document actually
+                // states — absent means blank, never invented.
+                "contactName" to Schema.string(description = "Business contact person's name, if stated"),
+                "contactPhone" to Schema.string(description = "Business phone number, if stated"),
+                "contactEmail" to Schema.string(description = "Business email address, if stated"),
+                "teamSize" to Schema.string(description = "Team size or headcount, if stated (e.g. '1-5', '12 crew')"),
+                "servesResidential" to Schema.boolean(description = "Whether residential customers are served, if stated"),
+                "servesCommercial" to Schema.boolean(description = "Whether commercial customers are served, if stated")
             ),
-            optionalProperties = listOf("serviceArea", "businessHours", "pricingApproach", "brandTone")
+            optionalProperties = listOf("serviceArea", "businessHours", "pricingApproach", "brandTone", "contactName", "contactPhone", "contactEmail", "teamSize", "servesResidential", "servesCommercial")
         )
         Firebase.ai.generativeModel(
             modelName = MODEL_FAST,
@@ -254,18 +262,19 @@ class AiRepository {
 
     suspend fun extractOnboardingProfile(
         descriptionOrDoc: String,
-        attachedBitmap: Bitmap? = null
+        attachedBitmaps: List<Bitmap> = emptyList()
     ): Result<OnboardingExtraction> = try {
         val response = withTimeout(60_000L) {
             onboardingModel.generateContent(
                 content {
                     text(
-                        "Extract the real service business profile from the text or image provided. " +
-                            "Do not invent prices or fields not present; provide clean industry classification and practical default services.\n\n" +
+                        "Extract the real service business profile from the text or image(s) provided. " +
+                            "Do not invent prices or fields not present; provide clean industry classification and practical default services. " +
+                            "Include the business contact name, phone, and email, team size, and whether residential and commercial customers are served — but only when the document actually states them; leave them blank when absent.\n\n" +
                             descriptionOrDoc.take(6000)
                     )
-                    if (attachedBitmap != null) {
-                        image(scaleBitmapUnderLimit(attachedBitmap))
+                    attachedBitmaps.take(6).forEach { bitmap ->
+                        image(scaleBitmapUnderLimit(bitmap))
                     }
                 }
             )
@@ -290,7 +299,13 @@ class AiRepository {
                 businessHours = json.optString("businessHours", "").trim(),
                 pricingApproach = json.optString("pricingApproach", "").trim(),
                 brandTone = json.optString("brandTone", "").trim(),
-                emergencyAvailable = json.optBoolean("emergencyAvailable", false)
+                emergencyAvailable = json.optBoolean("emergencyAvailable", false),
+                contactName = json.optString("contactName", "").trim(),
+                contactPhone = json.optString("contactPhone", "").trim(),
+                contactEmail = json.optString("contactEmail", "").trim(),
+                teamSize = json.optString("teamSize", "").trim(),
+                servesResidential = json.optBoolean("servesResidential", true),
+                servesCommercial = json.optBoolean("servesCommercial", false)
             )
         )
     } catch (e: TimeoutCancellationException) {
@@ -392,3 +407,22 @@ class AiRepository {
         )
     }
 }
+
+/**
+ * True when a Firebase AI failure is an App Check rejection (the
+ * debug token was never registered in the console, or enforcement is
+ * on for an unregistered build). The raw message ("Firebase App Check
+ * token is invalid.") tells the owner nothing actionable, so callers
+ * show the setup card instead — see AppCheckInit.readDebugSecret.
+ */
+fun isAppCheckFailure(error: Throwable?): Boolean {
+    var current = error
+    while (current != null) {
+        if (current.message?.contains("app check", ignoreCase = true) == true) return true
+        current = current.cause
+    }
+    return false
+}
+
+fun isAppCheckFailureMessage(message: String?): Boolean =
+    message?.contains("app check", ignoreCase = true) == true
