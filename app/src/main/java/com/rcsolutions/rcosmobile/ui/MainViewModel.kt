@@ -22,6 +22,9 @@ import com.rcsolutions.rcosmobile.data.GmailOAuthStart
 import com.rcsolutions.rcosmobile.data.ServerApiClient
 import com.rcsolutions.rcosmobile.data.ServerStatus
 import com.rcsolutions.rcosmobile.data.LiveKitVoiceManager
+import com.rcsolutions.rcosmobile.data.OUTBOUND_SETUP_MESSAGE
+import com.rcsolutions.rcosmobile.data.OutboundCallManager
+import com.rcsolutions.rcosmobile.data.OutboundStatus
 import com.rcsolutions.rcosmobile.data.MODEL_GENERAL
 import com.rcsolutions.rcosmobile.data.MODEL_LIVEKIT_VOICE
 import com.rcsolutions.rcosmobile.data.LocalPrefsState
@@ -29,6 +32,7 @@ import com.rcsolutions.rcosmobile.data.RcosDefaults
 import com.rcsolutions.rcosmobile.data.RcosRepository
 import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
 import com.rcsolutions.rcosmobile.data.WeatherService
+import com.rcsolutions.rcosmobile.data.toBusinessSyncRequest
 import com.rcsolutions.rcosmobile.security.readDebugSecret
 import com.rcsolutions.rcosmobile.model.ActionRecord
 import com.rcsolutions.rcosmobile.model.ActionStatus
@@ -53,6 +57,8 @@ import com.rcsolutions.rcosmobile.model.JobStatus
 import com.rcsolutions.rcosmobile.model.LiveVoiceStatus
 import com.rcsolutions.rcosmobile.model.LiveVoiceUiState
 import com.rcsolutions.rcosmobile.model.OnboardingExtraction
+import com.rcsolutions.rcosmobile.model.OutboundCallStatus
+import com.rcsolutions.rcosmobile.model.OutboundCallUiState
 import com.rcsolutions.rcosmobile.model.Quote
 import com.rcsolutions.rcosmobile.model.QuoteDraftSuggestion
 import com.rcsolutions.rcosmobile.model.TaskBucket
@@ -105,6 +111,7 @@ class MainViewModel(
     private val prefsRepo: UserPreferencesRepository,
     private val aiRepo: AiRepository,
     private val liveKitVoiceManager: LiveKitVoiceManager,
+    private val outboundCallManager: OutboundCallManager,
     private val weatherService: WeatherService,
     private val serverApi: ServerApiClient = ServerApiClient(),
     private val connectivityMonitor: ConnectivityMonitor? = null,
@@ -118,6 +125,11 @@ class MainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LocalPrefsState())
 
     private val reloadTrigger = MutableStateFlow(0)
+
+    /** Business ids with a server re-sync in flight — the same guard
+     * as the old app's `businessSyncInFlight` set, so concurrent
+     * triggers (load + foreground) never double-send one business. */
+    private val businessSyncInFlight = mutableSetOf<String>()
 
     val businessesState: StateFlow<UiState<List<BusinessAccount>>> =
         reloadTrigger.flatMapLatest {
@@ -293,6 +305,21 @@ class MainViewModel(
 
     private val _liveVoiceState = MutableStateFlow(LiveVoiceUiState())
     val liveVoiceState: StateFlow<LiveVoiceUiState> = _liveVoiceState.asStateFlow()
+
+    /** Outbound dial-out call state (LiveKit dialer). The manager owns
+     * the call; this mirrors it, and the overlay renders it. */
+    private val _outboundCallState = MutableStateFlow(OutboundCallUiState())
+    val outboundCallState: StateFlow<OutboundCallUiState> = _outboundCallState.asStateFlow()
+
+    /** Outbound dialing availability on the server (trunk configured?).
+     * Null = never checked; unknown never blocks a dial attempt. */
+    private val _outboundStatus = MutableStateFlow<OutboundStatus?>(null)
+    val outboundStatus: StateFlow<OutboundStatus?> = _outboundStatus.asStateFlow()
+
+    /** Name/phone/note for the call in progress — logged when it ends
+     * (only when it actually connected for > 0 seconds). */
+    private var outboundLogInfo: Triple<String, String, String>? = null
+    private var outboundLoggedForSeconds: Int = -1
 
     /** True while the live voice session is on the speakerphone. The
      * session always starts on the earpiece (see LiveKitVoiceManager);
@@ -524,6 +551,23 @@ class MainViewModel(
         // app keeps showing cached Firestore data); coming back online
         // re-probes the server automatically.
         refreshServerStatus()
+        // Server business re-sync (old app's PR #58, ported): the
+        // server keeps its own business store, wiped on every
+        // redeploy, and its login gate refuses a businessId the caller
+        // is not a member of ("You are not on this team"). Re-save the
+        // active business when it is first observed or switches, so the
+        // gate passes after a wipe. A failed sync is retried on the
+        // next foreground return (see onAppForegrounded), not
+        // forgotten for the session.
+        viewModelScope.launch {
+            var lastSyncedId: String? = null
+            activeBusiness.collect { biz ->
+                val id = biz?.id.orEmpty()
+                if (biz == null || id.isBlank() || id == lastSyncedId) return@collect
+                lastSyncedId = id
+                syncBusinessToServer(biz)
+            }
+        }
         viewModelScope.launch {
             var wasOnline: Boolean? = null
             connectionState.collect { state ->
@@ -538,6 +582,19 @@ class MainViewModel(
                     refreshServerStatus()
                 }
                 wasOnline = online
+            }
+        }
+        // Outbound dialer: mirror the manager's call state, and log the
+        // call once when it ends (only when it actually connected).
+        viewModelScope.launch {
+            outboundCallManager.state.collect { managerState ->
+                val previous = _outboundCallState.value
+                _outboundCallState.value = managerState
+                val ended = managerState.status == OutboundCallStatus.ENDED ||
+                    managerState.status == OutboundCallStatus.ERROR
+                val wasActive = previous.status == OutboundCallStatus.DIALING ||
+                    previous.status == OutboundCallStatus.CONNECTED
+                if (ended && wasActive) logOutboundCallIfNeeded(managerState)
             }
         }
     }
@@ -570,6 +627,58 @@ class MainViewModel(
         viewModelScope.launch {
             prefsRepo.setActiveBusinessId(businessId)
         }
+    }
+
+    /**
+     * Server business re-sync (old app's PR #58, ported). The server
+     * keeps its own business store (local JSON, wiped on every
+     * redeploy) and its login gate refuses a businessId the caller is
+     * not a member of — that is the "You are not on this team" 403 on
+     * live voice, Assistant chat, and Documents. Re-saving the
+     * business restores the server's copy with the caller as owner.
+     * Best-effort and SILENT: a failure never blocks the app, shows
+     * no error, and fakes nothing — it only logs, and the next
+     * foreground return retries. The GET check means a business the
+     * server already has is never re-POSTed.
+     */
+    private fun syncBusinessToServer(biz: BusinessAccount) {
+        val id = biz.id
+        if (id.isBlank() || businessSyncInFlight.contains(id)) return
+        businessSyncInFlight.add(id)
+        viewModelScope.launch {
+            try {
+                when (val listed = serverApi.listServerBusinesses()) {
+                    is ApiResult.Success -> {
+                        if (listed.data.any { it.id == id }) return@launch
+                    }
+                    else -> {
+                        // Unknown server state: try the POST anyway —
+                        // the server answers 200/201 for the owner, and
+                        // a failure here is only logged below.
+                    }
+                }
+                when (val result = serverApi.registerBusiness(
+                    biz.toBusinessSyncRequest(currentUserId, currentUserEmail, currentUserName)
+                )) {
+                    is ApiResult.Success -> Log.i(TAG, "Business $id re-synced to server.")
+                    is ApiResult.HttpError -> Log.w(TAG, "Business re-sync failed (${result.status}): ${result.message}")
+                    is ApiResult.NetworkError -> Log.w(TAG, "Business re-sync failed: ${result.message}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Business re-sync failed", e)
+            } finally {
+                businessSyncInFlight.remove(id)
+            }
+        }
+    }
+
+    /** Called when the app returns to the foreground: a redeploy can
+     * wipe the server's business store while the app sits
+     * backgrounded, so re-check (and re-save if missing) the active
+     * business. Silent and best-effort, like the initial sync. */
+    fun onAppForegrounded() {
+        val biz = activeBusiness.value ?: return
+        syncBusinessToServer(biz)
     }
 
     fun refreshOperationalFeeds() {
@@ -1180,6 +1289,23 @@ class MainViewModel(
         val biz = activeBusiness.value
         val persona = personaForEmployee(employee.id)
 
+        // An outbound dial-out call owns the mic and the earpiece —
+        // live voice waits until it ends (the dialer refuses the
+        // reverse too).
+        if (outboundCallState.value.status == OutboundCallStatus.DIALING ||
+            outboundCallState.value.status == OutboundCallStatus.CONNECTED
+        ) {
+            _liveVoiceState.value = LiveVoiceUiState(
+                status = LiveVoiceStatus.ERROR,
+                modelId = MODEL_LIVEKIT_VOICE,
+                activeRoleName = employee.name,
+                durationSeconds = 0,
+                statusDetail = "Voice session unavailable",
+                error = "End the outbound call first, then start live voice."
+            )
+            return
+        }
+
         viewModelScope.launch {
             liveTimerJob?.cancel()
             _liveVoiceState.value = LiveVoiceUiState(
@@ -1282,6 +1408,174 @@ class MainViewModel(
     fun dismissLiveVoiceError() {
         _liveVoiceState.value = LiveVoiceUiState()
         _isSpeakerphone.value = false
+    }
+
+    // ---- Outbound dial-out calls (LiveKit dialer, original PR #75) ----
+    /**
+     * Dial a number from the Calls dialpad in-app over LiveKit SIP —
+     * the original app's dialer (PR #75), not the phone dialer. The
+     * number is validated like the original (>= 7 digits); the trunk
+     * status is checked first so a missing trunk is an honest message
+     * instead of a failed dial; an unknown status never blocks the
+     * attempt (the dial itself surfaces the real error).
+     */
+    fun startOutboundCall(name: String, phone: String, note: String) {
+        val biz = activeBusiness.value
+        val cleanPhone = phone.trim()
+        if (biz == null) {
+            _outboundCallState.value = OutboundCallUiState(
+                status = OutboundCallStatus.ERROR,
+                number = cleanPhone,
+                error = "Pick a business first, then dial."
+            )
+            return
+        }
+        if (liveVoiceState.value.status == LiveVoiceStatus.CONNECTING ||
+            liveVoiceState.value.status == LiveVoiceStatus.LIVE
+        ) {
+            _outboundCallState.value = OutboundCallUiState(
+                status = OutboundCallStatus.ERROR,
+                number = cleanPhone,
+                error = "End the live voice session first, then dial out."
+            )
+            return
+        }
+        if (cleanPhone.length < 7) {
+            _outboundCallState.value = OutboundCallUiState(
+                status = OutboundCallStatus.ERROR,
+                number = cleanPhone,
+                error = "Enter a full phone number to dial."
+            )
+            return
+        }
+        outboundLogInfo = Triple(name.trim(), cleanPhone, note.trim())
+        outboundLoggedForSeconds = -1
+        viewModelScope.launch {
+            when (val statusResult = serverApi.fetchOutboundStatus(biz.id)) {
+                is ApiResult.Success -> {
+                    _outboundStatus.value = statusResult.data
+                    if (!statusResult.data.configured) {
+                        _outboundCallState.value = OutboundCallUiState(
+                            status = OutboundCallStatus.ERROR,
+                            number = cleanPhone,
+                            error = OUTBOUND_SETUP_MESSAGE
+                        )
+                        return@launch
+                    }
+                }
+                else -> {
+                    // Unknown status: let the dial attempt surface the real error.
+                }
+            }
+            outboundCallManager.dial(biz.id, cleanPhone, name.trim())
+                .onFailure { e ->
+                    val message = e.message.orEmpty()
+                    val friendly = if (message.contains("trunk", ignoreCase = true) ||
+                        message.contains("not set up", ignoreCase = true)
+                    ) {
+                        OUTBOUND_SETUP_MESSAGE
+                    } else {
+                        message.ifBlank { "The call could not be started. Try again." }
+                    }
+                    _outboundCallState.value = OutboundCallUiState(
+                        status = OutboundCallStatus.ERROR,
+                        number = cleanPhone,
+                        error = friendly
+                    )
+                }
+        }
+    }
+
+    fun endOutboundCall() {
+        viewModelScope.launch { outboundCallManager.hangup() }
+    }
+
+    /** Speakerphone toggle for the outbound call. Starts on the
+     * earpiece; flips and reports the actual state back. */
+    fun toggleOutboundSpeakerphone() {
+        val current = _outboundCallState.value
+        if (current.status != OutboundCallStatus.DIALING && current.status != OutboundCallStatus.CONNECTED) return
+        outboundCallManager.setSpeakerphone(!current.speakerOn)
+    }
+
+    fun toggleOutboundMute() {
+        val current = _outboundCallState.value
+        if (current.status != OutboundCallStatus.DIALING && current.status != OutboundCallStatus.CONNECTED) return
+        viewModelScope.launch { outboundCallManager.setMuted(!current.muted) }
+    }
+
+    fun sendOutboundDtmf(digit: String) {
+        viewModelScope.launch { outboundCallManager.sendDtmf(digit) }
+    }
+
+    fun clearOutboundSentDigits() {
+        outboundCallManager.clearSentDigits()
+    }
+
+    fun dismissOutboundError() {
+        outboundCallManager.reset()
+        _outboundCallState.value = OutboundCallUiState()
+    }
+
+    /** Refresh the outbound trunk status (called when the Calls screen
+     * appears). A failure leaves the last known status; the dial
+     * attempt surfaces the real error. */
+    fun refreshOutboundStatus() {
+        val biz = activeBusiness.value ?: return
+        viewModelScope.launch {
+            when (val result = serverApi.fetchOutboundStatus(biz.id)) {
+                is ApiResult.Success -> _outboundStatus.value = result.data
+                else -> Unit
+            }
+        }
+    }
+
+    /**
+     * Logs the outbound call once, when it ends — only when it actually
+     * connected for more than 0 seconds, exactly like the original
+     * (OutboundDialer endCall). Direction OUTBOUND, answeredBy
+     * human_operator (the owner dialed). A call that never connected
+     * logs nothing: no fake "2 min" entry.
+     */
+    private fun logOutboundCallIfNeeded(managerState: OutboundCallUiState) {
+        val info = outboundLogInfo ?: return
+        val seconds = managerState.durationSeconds
+        if (seconds <= 0 || outboundLoggedForSeconds == seconds) return
+        outboundLoggedForSeconds = seconds
+        val (name, phone, note) = info
+        val durationLabel = if (seconds >= 60) "${seconds / 60}m ${seconds % 60}s" else "${seconds}s"
+        val summary = buildString {
+            append("Outbound call to ${formatDialDisplay(phone)} from the app dialer.")
+            if (note.isNotBlank()) append(" $note")
+        }
+        logCall(
+            callerName = name.ifBlank { formatDialDisplay(phone) },
+            callerNumber = phone,
+            direction = CallDirection.OUTBOUND,
+            status = CallStatus.COMPLETED,
+            durationLabel = durationLabel,
+            summary = summary,
+            answeredBy = "human_operator"
+        )
+    }
+
+    /** US display format for a dialed number — the original app's
+     * formatDialDisplay: +1 (XXX) XXX-XXXX, (XXX) XXX-XXXX, anything
+     * else shown as typed. */
+    private fun formatDialDisplay(raw: String): String {
+        val trimmed = raw.trim()
+        val hasPlus = trimmed.startsWith("+")
+        val digits = trimmed.filter { it.isDigit() }
+        if (hasPlus && digits.length == 11 && digits.startsWith("1")) {
+            return "+1 (${digits.substring(1, 4)}) ${digits.substring(4, 7)}-${digits.substring(7)}"
+        }
+        if (!hasPlus && digits.length == 10) {
+            return "(${digits.substring(0, 3)}) ${digits.substring(3, 6)}-${digits.substring(6)}"
+        }
+        if (!hasPlus && digits.length == 11 && digits.startsWith("1")) {
+            return "+1 (${digits.substring(1, 4)}) ${digits.substring(4, 7)}-${digits.substring(7)}"
+        }
+        return trimmed
     }
 
     // ---- Assistant documents (server-side) ----
@@ -1705,7 +1999,8 @@ class MainViewModel(
         direction: CallDirection,
         status: CallStatus,
         durationLabel: String,
-        summary: String
+        summary: String,
+        answeredBy: String? = null
     ) {
         val biz = activeBusiness.value ?: return
         if (callerName.isBlank() || callerNumber.isBlank()) {
@@ -1725,7 +2020,7 @@ class MainViewModel(
                     durationLabel = durationLabel.ifBlank { "1 min" },
                     timeLabel = timeLabel,
                     summary = summary.trim(),
-                    answeredBy = if (biz.aiReceptionistEnabled) "ai_receptionist" else "human_operator"
+                    answeredBy = answeredBy ?: if (biz.aiReceptionistEnabled) "ai_receptionist" else "human_operator"
                 )
             ).onSuccess {
                 _bannerMessage.value = "Call logged."

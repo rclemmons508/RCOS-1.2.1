@@ -5,6 +5,7 @@ import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.rcsolutions.rcosmobile.BuildConfig
+import com.rcsolutions.rcosmobile.model.BusinessAccount
 import com.rcsolutions.rcosmobile.model.ChatMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -158,6 +159,42 @@ data class VoiceTokenResponse(
     val room: String = "",
 )
 
+/** POST /api/calls/dial request — same shape the original app's
+ * `dialNumber` sends (`src/lib/outboundCalls.ts`). */
+@Serializable
+data class DialOutboundRequest(
+    val businessId: String,
+    val to: String,
+)
+
+/** A body that carries only a businessId (hangup). */
+@Serializable
+data class BusinessIdRequest(
+    val businessId: String,
+)
+
+/** POST /api/calls/dial response. The server creates the room, dials
+ * the number in as a SIP participant on the stored Vonage outbound
+ * trunk, and returns a publish-capable token. NO agent is dispatched
+ * into an outbound room. 503 = the outbound trunk is not configured;
+ * 400 = bad/blocked destination; 429 = daily cap. */
+@Serializable
+data class DialResponse(
+    val token: String = "",
+    val url: String = "",
+    val room: String = "",
+    val to: String = "",
+)
+
+/** GET /api/calls/outbound-status response — whether the server can
+ * dial out at all. */
+@Serializable
+data class OutboundStatus(
+    val configured: Boolean = false,
+    val livekitConfigured: Boolean = false,
+    val trunkConfigured: Boolean = false,
+)
+
 /** Details the server extracted from an uploaded document
  * (`POST /api/assistant/documents`). `found` lists which fields were
  * found (a list of field names, not a boolean). Text is never sent to
@@ -199,6 +236,145 @@ data class UploadAssistantDocumentRequest(
     val mimeType: String,
     val fileBase64: String,
 )
+
+/** One member of a business roster, as the server stores it
+ * (`sanitizeMembers` in server.ts): userId, email, name, role
+ * ('owner' | 'member'), joinedAt. */
+@Serializable
+data class BusinessSyncMember(
+    val userId: String = "",
+    val email: String = "",
+    val name: String = "",
+    val role: String = "member",
+    val joinedAt: String = "",
+)
+
+/** Contact block the server reads from a business
+ * (`documentContactInfo` coercion in server.ts keeps phone/email). */
+@Serializable
+data class BusinessSyncContactInfo(
+    val email: String = "",
+    val phone: String = "",
+)
+
+/** POST /api/businesses request — the full business record, as the
+ * old app's onboarding sends it. The server coerces each field and
+ * ignores unknown ones; an owner re-saving their own business is
+ * allowed (200), a new one is created (201), 409 only when someone
+ * else owns that id. Only the fields the server reads are sent. */
+@Serializable
+data class BusinessSyncRequest(
+    val id: String,
+    val ownerId: String = "",
+    val members: List<BusinessSyncMember> = emptyList(),
+    val contactEmail: String = "",
+    val contactName: String = "",
+    val contactPhone: String = "",
+    val name: String = "",
+    val industry: String = "general_small_business",
+    val size: String = "",
+    val services: List<String> = emptyList(),
+    val pricingApproach: String = "",
+    val brandTone: String = "",
+    val businessKnowledge: String = "",
+    val painPoints: List<String> = emptyList(),
+    val autonomyMode: String = "autonomous",
+    val answeringMode: String = "ai",
+    val dollarThreshold: Double = 250.0,
+    val activeEmployees: Map<String, Boolean> = emptyMap(),
+    val onboardingCompleted: Boolean = false,
+    val serviceArea: String = "",
+    val businessHours: String = "",
+    val emergencyAvailable: Boolean = false,
+    val teamSize: String = "",
+    val servesResidential: Boolean = false,
+    val servesCommercial: Boolean = false,
+    val documentContactInfo: BusinessSyncContactInfo? = null,
+)
+
+/** One row of GET /api/businesses — the server returns only the
+ * caller's own businesses. Only the id is needed (to check whether
+ * the server already has this business); the rest is ignored. */
+@Serializable
+data class ServerBusinessSummary(
+    val id: String = "",
+)
+
+/**
+ * Build the POST /api/businesses payload from the Firestore business
+ * record. The gate proves membership from the verified Firebase
+ * token, so the payload must name the SAME owner: ownerId is the
+ * record's owner (falling back to the signed-in user), and the
+ * members roster is guaranteed to contain an owner entry for the
+ * signed-in user — a record whose roster lost it (older docs) would
+ * otherwise 403 every gated call even though the owner is right.
+ * contactEmail falls back through the document contact block and the
+ * owner's own email, because the live business keeps its email in
+ * documentContactInfo, not top-level contactEmail.
+ */
+fun BusinessAccount.toBusinessSyncRequest(
+    currentUid: String,
+    currentEmail: String,
+    currentName: String,
+): BusinessSyncRequest {
+    val ownerUid = ownerId.ifBlank { currentUid }
+    val ownerEmail = currentEmail.trim().lowercase()
+    val roster = members.map {
+        BusinessSyncMember(
+            userId = it.userId,
+            email = it.email,
+            name = it.name,
+            role = if (it.role == "owner") "owner" else "member",
+        )
+    }.filter { it.userId.isNotBlank() || it.email.isNotBlank() }.toMutableList()
+    val hasOwnerEntry = roster.any {
+        it.role == "owner" && (it.userId == ownerUid ||
+            (ownerEmail.isNotBlank() && it.email.trim().lowercase() == ownerEmail))
+    }
+    if (!hasOwnerEntry && ownerUid.isNotBlank()) {
+        roster.add(
+            BusinessSyncMember(
+                userId = ownerUid,
+                email = ownerEmail,
+                name = currentName.ifBlank { contactName.ifBlank { name } },
+                role = "owner",
+            )
+        )
+    }
+    val contactEmailValue = contactEmail
+        .ifBlank { documentContactInfo?.email.orEmpty() }
+        .ifBlank { ownerEmail }
+    return BusinessSyncRequest(
+        id = id,
+        ownerId = ownerUid,
+        members = roster,
+        contactEmail = contactEmailValue,
+        contactName = contactName.ifBlank { currentName },
+        contactPhone = contactPhone.ifBlank { documentContactInfo?.phone.orEmpty() },
+        name = name.ifBlank { "My Business" },
+        industry = industry.ifBlank { "general_small_business" },
+        size = size,
+        services = services,
+        pricingApproach = pricingApproach,
+        brandTone = brandTone,
+        businessKnowledge = businessKnowledge,
+        painPoints = painPoints,
+        autonomyMode = autonomyMode,
+        answeringMode = if (answeringMode == "manual") "manual" else "ai",
+        dollarThreshold = dollarThreshold,
+        activeEmployees = activeEmployees,
+        onboardingCompleted = onboardingCompleted,
+        serviceArea = serviceArea,
+        businessHours = businessHours,
+        emergencyAvailable = emergencyAvailable,
+        teamSize = teamSize,
+        servesResidential = servesResidential,
+        servesCommercial = servesCommercial,
+        documentContactInfo = documentContactInfo?.let {
+            BusinessSyncContactInfo(email = it.email, phone = it.phone)
+        },
+    )
+}
 
 // ---- Result type ----
 
@@ -434,6 +610,29 @@ class ServerApiClient(
     suspend fun listAssistantDocuments(businessId: String): ApiResult<List<AssistantDocument>> =
         parse(request("GET", "/api/assistant/documents?businessId=${encode(businessId)}", requireAuth = true))
 
+    /** GET /api/businesses — the caller's own businesses only (the
+     * server never returns another tenant's). Used by the re-sync to
+     * skip the POST when the server already has this business. */
+    suspend fun listServerBusinesses(): ApiResult<List<ServerBusinessSummary>> =
+        parse(request("GET", "/api/businesses", requireAuth = true))
+
+    /** POST /api/businesses — (re-)save the full business record on
+     * the server so the login gate passes after a redeploy wipes the
+     * server's store. An owner re-saving their own business answers
+     * 200; a new record answers 201; 409 only when someone else owns
+     * that id. Any 2xx counts as saved — the body is not parsed. */
+    suspend fun registerBusiness(business: BusinessSyncRequest): ApiResult<Unit> {
+        val encoded = json.encodeToString(
+            BusinessSyncRequest.serializer(),
+            business,
+        )
+        return when (val result = request("POST", "/api/businesses", body = encoded, requireAuth = true)) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            is ApiResult.HttpError -> result
+            is ApiResult.NetworkError -> result
+        }
+    }
+
     /** DELETE /api/assistant/documents/{id} — the server answers 2xx
      * with no body the client needs; any 2xx counts as deleted. */
     suspend fun deleteAssistantDocument(businessId: String, documentId: String): ApiResult<Unit> =
@@ -442,5 +641,46 @@ class ServerApiClient(
             is ApiResult.HttpError -> result
             is ApiResult.NetworkError -> result
         }
+
+    /** GET /api/calls/outbound-status — whether outbound dialing is
+     * configured on the server. Unknown status never blocks a dial
+     * attempt: the dial itself surfaces the real error. */
+    suspend fun fetchOutboundStatus(businessId: String): ApiResult<OutboundStatus> =
+        parse(request("GET", "/api/calls/outbound-status?businessId=${encode(businessId)}", requireAuth = true))
+
+    /** POST /api/calls/dial — start an outbound call. 30s timeout:
+     * the server creates the room and places the SIP call before it
+     * answers (same as the original app's `dialNumber`). A blank
+     * token/url/room is treated as a failure, never passed to LiveKit. */
+    suspend fun dialOutbound(businessId: String, to: String): ApiResult<DialResponse> {
+        val encoded = json.encodeToString(
+            DialOutboundRequest.serializer(),
+            DialOutboundRequest(businessId = businessId, to = to),
+        )
+        return when (val result = parse<DialResponse>(request("POST", "/api/calls/dial", body = encoded, requireAuth = true, timeoutMsOverride = 30_000))) {
+            is ApiResult.Success -> if (result.data.token.isBlank() || result.data.url.isBlank() || result.data.room.isBlank()) {
+                ApiResult.HttpError(502, "The server answered but the call could not be started. Try again.")
+            } else {
+                result
+            }
+            else -> result
+        }
+    }
+
+    /** POST /api/calls/dial/{room}/hangup — deletes the room, which
+     * drops the SIP leg. Best-effort: any result counts as hung up
+     * (the room may already be gone). The original app's
+     * `hangupOutboundCall` sends the businessId in the body. */
+    suspend fun hangupOutbound(roomName: String, businessId: String): ApiResult<Unit> {
+        val encoded = json.encodeToString(
+            BusinessIdRequest.serializer(),
+            BusinessIdRequest(businessId = businessId),
+        )
+        return when (val result = request("POST", "/api/calls/dial/${encode(roomName)}/hangup", body = encoded, requireAuth = true)) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            is ApiResult.HttpError -> result
+            is ApiResult.NetworkError -> result
+        }
+    }
 
 }

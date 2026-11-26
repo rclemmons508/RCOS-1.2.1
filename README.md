@@ -155,6 +155,38 @@ One PR for all seven items from Ryan's Nov 26 screenshots. The exact-design lock
 - **6. AI agent editing + toggle glitch:** tapping an agent row in AI Team & Automation opens `AgentEditScreen` (full-screen): what the agent does, its permissions (8-item catalog in `RcosDefaults.AGENT_PERMISSIONS` with per-agent defaults), thresholds (act-on-its-own under $ / escalate above $, money-moves-need-approval switch), and custom instructions. Saved per agent as `agentSettings.<employeeId>` on the business doc (`MainViewModel.updateAgentSettings`); an unedited agent reads the defaults. **Rules change:** `firestore.rules` adds `'agentSettings'` to the businesses update allowlist, with a matching test in `firestore.test.js` — publish the rules after this PR merges or agent-settings saves will be denied. The Support Assistant toggle glitch was the AI Team dialog overflowing (13+ rows in a fixed column, bottom rows rendered under the button bar): the dialog content now scrolls.
 - **7. Notifications toggle fix:** diagnosis confirmed in code — the manifest had no `POST_NOTIFICATIONS` and no notification channel existed anywhere, so the phone's Settings toggle had nothing to grant. Fix: the permission is declared in `AndroidManifest.xml`, `notifications/CallAlertNotifications.kt` creates the `rcos_calls` channel (same id as the old app, high importance, lock-screen visible) on launch, and Account → Notifications shows the real grant state with an Enable button (runtime request on Android 13+; opens the app's notification settings if the request was denied). **Explicitly NOT in this PR:** the full push-delivery path (receptionist answers → an alert arrives). This app has no FCM, no server, and no LiveKit webhook — nothing was invented or faked. That is a separate follow-up (Ryan approved it for after this PR).
 
+## Server business re-sync — fixes "You are not on this team" (403)
+
+The Railway server keeps its own business store (local JSON, wiped on every
+redeploy) and its login gate refuses any businessId the caller is not a member
+of. The app never registered its business on the server, so after a redeploy
+live voice, Assistant chat, and Documents all answered 403 "You are not on
+this team" even though Firestore had the business with Ryan as owner. This
+ports the old app's re-sync (RCOS-MOBILE-APP PR #58): when the active business
+is first observed or switches, and again every time the app returns to the
+foreground, the app re-saves the business to the server (`POST /api/businesses`
+with the full record — ownerId, members roster with the owner entry,
+contactEmail). The server answers 200 for an owner re-saving their own
+business, 201 for a new one, 409 only if someone else owns that id. A GET
+first (`GET /api/businesses`, caller-scoped) skips the POST when the server
+already has it. The sync is silent and best-effort: a failure only logs, never
+blocks the app or shows an error — the gate surfaces the real error if a call
+is attempted.
+
+- App side: `ServerApiClient` (`listServerBusinesses`, `registerBusiness`,
+  `BusinessSyncRequest` + `BusinessAccount.toBusinessSyncRequest`),
+  `MainViewModel` (`syncBusinessToServer`, `onAppForegrounded`, in-flight
+  dedupe per business), `MainActivity` (ON_RESUME hook in the shell).
+- No server changes (different repo). No Firestore changes. The gate error
+  text comes from the server — the app never invents a team-state message.
+
+### Phone test (re-sync, after merge + install of the main APK)
+1. Install the new build, open the app, wait a few seconds (the sync runs on load).
+2. Calls → Talk Live with AI Receptionist → the live voice session starts (no 403).
+3. AI → type a message → the Assistant answers (no "You are not on this team").
+4. AI → Documents → the document list loads (no "You are not on this team").
+5. Background the app, wait, reopen it → repeat 2–4 (the foreground re-sync covers a redeploy wipe while backgrounded).
+
 ### Phone test (rework, after merge + install of the main APK)
 1. Onboarding: create a new workspace → upload a company PDF/flyer → the sections fill from the document (blank where the document says nothing) → edit a field by hand → Launch Workspace. If the App Check card appears, copy the token into the Firebase console (step above) and retry extraction.
 2. Account → Business Profile → the workspace list shows each workspace with its trade + created date → tap one → the app switches to it.
@@ -163,3 +195,54 @@ One PR for all seven items from Ryan's Nov 26 screenshots. The exact-design lock
 5. Account → AI Team & Automation → scroll to the bottom (no doubled/overlapping toggle) → tap Support Assistant → change a permission and a threshold → Save → reopen it → the changes stuck.
 6. Phone Settings → Apps → RCOS Mobile → Notifications → the toggle turns on and stays on. Account → Notifications → "Phone Notifications" reads On.
 7. After merge, publish the Firestore rules from main (same Rules API flow as the PR #8 fix) so agent-settings saves pass.
+
+## LiveKit in-app dialer — dial out from the app over LiveKit SIP (Nov 26)
+
+The original app's dialer (RCOS-MOBILE-APP PR #75), ported to 1.2.1. Calls → dial a
+number on the pad → Dial & Log → the call happens **in the app** over LiveKit SIP (no
+phone dialer), earpiece by default, speakerphone toggle, DTMF pad during the call, 50s
+no-answer watchdog, hangup. The call is logged as outbound only when it actually
+connected for > 0 seconds.
+
+- Server side (unchanged, already live on Railway): `POST /api/calls/dial` (creates the
+  room, dials the number in as a SIP participant on the stored Vonage outbound trunk
+  `ST_hSBykFyskkmi`, returns a publish-capable token; NO agent is dispatched into an
+  outbound room), `POST /api/calls/dial/{room}/hangup` (deletes the room),
+  `GET /api/calls/outbound-status`. Outbound calls show +1 747 313 5541 as caller ID.
+  Vonage balance was $0.70 with an "active paid account required" notice — top up
+  Vonage first if the test call fails.
+- App side: `data/OutboundCallManager.kt` (dial/join/watchdog/DTMF/earpiece/hangup),
+  `ui/screens/OutboundCallOverlay.kt` (full-screen in-call UI), `ServerApiClient`
+  (`fetchOutboundStatus`, `dialOutbound` 30s timeout, `hangupOutbound`),
+  `MainViewModel` (`startOutboundCall` / `endOutboundCall` /
+  `toggleOutboundSpeakerphone` / `toggleOutboundMute` / `sendOutboundDtmf` /
+  `refreshOutboundStatus`, logs the call on end), `CallsScreen` (Dial & Log confirm
+  starts the in-app call; honest setup/error text under the dialpad), `MainActivity`
+  (overlay rendered above the Scaffold).
+- The receptionist live voice (Talk Live) and the Assistant live voice are untouched —
+  an outbound call and a live voice session cannot run at the same time (each refuses
+  while the other is active).
+- Call-row tap and voicemail "Call Back" still open the phone dialer (ACTION_DIAL) —
+  out of scope for this PR; a follow-up can route them through the in-app dialer too.
+
+### Phone test (dialer, after merge + install of the main APK)
+1. Calls → dial your own number on the pad → tap the green call button → add a name →
+   Dial & Log → the in-call screen opens in the app (not the phone dialer), you hear
+   ringing in the earpiece, your other phone rings showing +1 747 313 5541.
+2. Answer on the other phone → talk both ways → the timer runs → tap the keypad →
+   press 1 → the digit shows in the sent-digits record.
+3. End the call → the call appears in the call log as outbound with the real duration
+   (a call that never connected logs nothing).
+4. Dial a bad number (e.g. 123) → an honest error, no fake connected state. (Trunk not
+   configured → the amber setup note under the dialpad.)
+5. Talk Live with the AI Receptionist still works after the dialer build, and starting
+   live voice during an outbound call is refused with a plain message.
+
+## Assistant keyboard fix — input stays above the keyboard
+
+The AI Assistant's message box was hidden behind the soft keyboard while
+typing — the screen's root layout never consumed the IME insets (the manifest
+already had `adjustResize`). Fix: `.imePadding()` on the Assistant screen's
+root Column (same pattern as AccountScreen), so the input bar and the
+Voice/Camera/Attach pills sit above the keyboard. Phone test: AI → tap the
+message box → type — the text you are typing stays visible above the keyboard.

@@ -908,3 +908,26 @@ data class LiveVoiceUiState(
     val error: String? = null
 )
 
+/** Outbound (dial-out) call state — the LiveKit dialer (original PR
+ * #75 port). Mirrors [LiveVoiceUiState]: the manager owns the call,
+ * the ViewModel mirrors this state, the overlay renders it. */
+enum class OutboundCallStatus {
+    IDLE,
+    DIALING,
+    CONNECTED,
+    ENDED,
+    ERROR
+}
+
+data class OutboundCallUiState(
+    val status: OutboundCallStatus = OutboundCallStatus.IDLE,
+    val number: String = "",
+    val displayName: String = "",
+    val durationSeconds: Int = 0,
+    val speakerOn: Boolean = false,
+    val muted: Boolean = false,
+    val sentDigits: String = "",
+    val error: String? = null,
+    val dtmfError: String? = null
+)
+
