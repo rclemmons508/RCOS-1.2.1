@@ -11,6 +11,7 @@ import com.rcsolutions.rcosmobile.model.OutboundCallStatus
 import com.rcsolutions.rcosmobile.model.OutboundCallUiState
 import io.livekit.android.LiveKit
 import io.livekit.android.events.RoomEvent
+import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.Track
 import kotlinx.coroutines.CoroutineScope
