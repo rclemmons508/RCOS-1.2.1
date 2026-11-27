@@ -740,6 +740,15 @@ class MainViewModel(
     private fun syncBusinessToServer(biz: BusinessAccount) {
         val id = biz.id
         if (id.isBlank() || businessSyncInFlight.contains(id)) return
+        // Audit Phase 1 (finding 1) — only the owner re-registers
+        // the business on the server. A non-owner member would POST
+        // a roster whose "owner" entry carries the real owner's uid
+        // but the member's own email/name. The server already has
+        // the business from the owner, so a member skips the re-sync
+        // silently (never a UI error). An ownerless record (blank
+        // ownerId) still syncs — the signed-in user adopts it, as
+        // before.
+        if (biz.ownerId.isNotBlank() && biz.ownerId != currentUserId) return
         businessSyncInFlight.add(id)
         viewModelScope.launch {
             try {

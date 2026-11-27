@@ -361,6 +361,15 @@ data class ServerPhoneCall(
  * contactEmail falls back through the document contact block and the
  * owner's own email, because the live business keeps its email in
  * documentContactInfo, not top-level contactEmail.
+ *
+ * Audit Phase 1 (finding 1) — the owner entry is synthesized ONLY
+ * when the current user IS the owner (or the record is ownerless,
+ * preserving the adopt repair: ownerId blank falls back to the
+ * current user). A non-owner member used to get an "owner" entry
+ * with the real owner's uid but the member's own email/name, which
+ * the server then stored. The re-sync itself is also gated on the
+ * owner in MainViewModel.syncBusinessToServer; this is the second
+ * layer, so the mapper can never fabricate the entry on its own.
  */
 fun BusinessAccount.toBusinessSyncRequest(
     currentUid: String,
@@ -381,7 +390,12 @@ fun BusinessAccount.toBusinessSyncRequest(
         it.role == "owner" && (it.userId == ownerUid ||
             (ownerEmail.isNotBlank() && it.email.trim().lowercase() == ownerEmail))
     }
-    if (!hasOwnerEntry && ownerUid.isNotBlank()) {
+    // Audit Phase 1 (finding 1) — synthesize the owner entry only
+    // when the current user IS the owner (ownerUid == currentUid
+    // covers the ownerless-record adopt fallback, where ownerUid
+    // already fell back to currentUid). A non-owner never gets a
+    // fabricated owner entry carrying their own email/name.
+    if (!hasOwnerEntry && ownerUid.isNotBlank() && ownerUid == currentUid) {
         roster.add(
             BusinessSyncMember(
                 userId = ownerUid,
@@ -471,9 +485,12 @@ class ServerApiClient(
 
     /** The signed-in user's Firebase ID token, or null when signed out
      * or the token cannot be minted. Never a token for anyone else:
-     * this client only ever runs for the signed-in user. */
-    private suspend fun idToken(): String? = try {
-        auth.currentUser?.getIdToken(false)?.await()?.token
+     * this client only ever runs for the signed-in user. Audit Phase 1
+     * (finding 5) — `forceRefresh` mints a fresh token; used for the
+     * single retry after a 401, when the cached token may have
+     * expired between minting and the call. */
+    private suspend fun idToken(forceRefresh: Boolean = false): String? = try {
+        auth.currentUser?.getIdToken(forceRefresh)?.await()?.token
     } catch (e: Exception) {
         Log.w(TAG, "Could not mint Firebase ID token", e)
         null
@@ -496,6 +513,34 @@ class ServerApiClient(
         if (requireAuth && token.isNullOrBlank()) {
             return ApiResult.HttpError(401, "Your sign-in expired. Please sign in again.")
         }
+        val first = executeRequest(method, path, body, token, timeoutMsOverride)
+        // Audit Phase 1 (finding 5) — a cached ID token can expire
+        // between minting and the call. On a 401, mint a fresh token
+        // once and retry the request exactly once (no loops). A 401
+        // after the retry is a real auth failure and is returned
+        // honestly. A 401 before the token existed is impossible here
+        // (early returns above); a 401 on a public call is the
+        // server's business, not the token's, so it is not retried.
+        if (requireAuth && token != null &&
+            first is ApiResult.HttpError && first.status == 401
+        ) {
+            val freshToken = idToken(forceRefresh = true)
+            if (!freshToken.isNullOrBlank()) {
+                return executeRequest(method, path, body, freshToken, timeoutMsOverride)
+            }
+        }
+        return first
+    }
+
+    /** One HTTP round trip with the given token. Split out of
+     * [request] so a 401 can retry it with a fresh token. */
+    private suspend fun executeRequest(
+        method: String,
+        path: String,
+        body: String?,
+        token: String?,
+        timeoutMsOverride: Int?,
+    ): ApiResult<String> {
         return withContext(Dispatchers.IO) {
             var connection: HttpURLConnection? = null
             try {

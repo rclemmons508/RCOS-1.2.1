@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Audit Phase 1 — block cleartext traffic app-wide. The app talks
+     only to https endpoints (Railway server, Firebase, LiveKit).
+     No certificate pinning: Railway serves Let's Encrypt certificates
+     that rotate, so a leaf pin would break the app on rotation. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

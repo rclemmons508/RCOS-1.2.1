@@ -2,6 +2,7 @@ package com.rcsolutions.rcosmobile
 
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -253,7 +254,22 @@ private fun RcosAppRoot(
                     signOut(
                         credentialManager = credentialManager,
                         scope = scope,
-                        onBeforeAuthSignOut = { viewModel.clearPrefsBeforeSignOut() }
+                        onBeforeAuthSignOut = { viewModel.clearPrefsBeforeSignOut() },
+                        onSignOutComplete = {
+                            // Audit Phase 1 (finding 2) — this
+                            // MainViewModel is keyed by uid in the
+                            // Activity's ViewModelStore and survives
+                            // sign-out, so signing back in as the same
+                            // user would reuse stale state and
+                            // listeners. Clear the store so the next
+                            // sign-in builds a fresh ViewModel. Runs
+                            // on the main dispatcher (the
+                            // rememberCoroutineScope scope), after
+                            // Firebase sign-out; the composition still
+                            // holds its reference until the auth state
+                            // flips to null, so nothing here crashes.
+                            (context as? ComponentActivity)?.viewModelStore?.clear()
+                        }
                     )
                 }
             )

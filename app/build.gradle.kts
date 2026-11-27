@@ -43,6 +43,9 @@ android {
             signingConfig = signingConfigs.getByName("debugConfig")
         }
         release {
+            // Audit Phase 1 — release build type: R8 on, backups off
+            // (see AndroidManifest allowBackup=false), never debuggable.
+            isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
