@@ -348,3 +348,101 @@ invalid." banner still appeared. All 8 are in this one PR, one build.
 8. Trigger an AI call that used to show the raw App Check banner (e.g. an AI follow-up
    draft on a customer) → the setup card with the debug token shows instead; copy the
    token into the Firebase console once, retry, and the banner is gone for good.
+
+## Phase 1 audit fixes — findings 1, 2, 3, 5 + release hardening (Nov 27)
+
+Source: the 8-page audit report on the 1.2.1 Debug APK
+(`RCOS_Mobile_1.2.1_Debug_APK___Audit_Report_0_pvxk.pdf`). The 4 High
+findings were verified against this exact code before fixing; findings
+4, 6–15 are NOT in this PR (Phase 2/3 in the report).
+
+- Finding 1 (roster corruption, High) — `toBusinessSyncRequest`
+  built the "owner" entry from the CURRENT user, so a non-owner member
+  got an owner entry with the real owner's uid but the member's own
+  email/name, then POSTed it. Fixed twice: `syncBusinessToServer`
+  now re-registers ONLY when the current user is the owner (a member
+  skips silently; an ownerless record still syncs, preserving the
+  adopt repair), and the mapper itself only synthesizes the owner
+  entry when the current user is the owner.
+- Finding 2 (stale ViewModel after sign-out, High) — the MainViewModel
+  is `viewModel(key = uid)` in the Activity's store and survived
+  sign-out, so signing back in as the same user reused stale state
+  and listeners. Fixed: the sign-out path now clears the Activity's
+  `viewModelStore` in `onSignOutComplete` (after Firebase sign-out),
+  so the next sign-in builds a fresh ViewModel. Normal (non-sign-out)
+  flow untouched.
+- Finding 3 (App Check missing in push-started processes, High) —
+  `configureAppCheck` ran only in `MainActivity.onCreate`, so a
+  process started by FCM never installed it. Fixed: new
+  `RcosApplication : Application` installs App Check in `onCreate`
+  (registered as `android:name` on `<application>`). The MainActivity
+  call stays — it writes the debug token from the launch-intent extra
+  into the SDK's local debug store first; in a push-started process
+  there is no intent, so the debug factory reads the secret already
+  stored by a previous Activity launch.
+- Finding 5 (no token refresh on 401, High) — `idToken()` used
+  `getIdToken(false)` and `request()` never retried. Fixed: on a 401
+  response the request retries ONCE with a freshly minted token
+  (`getIdToken(true)`); a second 401 is returned honestly. Only
+  authenticated calls with a token retry; public calls and the
+  "not signed in" early returns do not.
+- Release build type — `release` in `app/build.gradle.kts` already
+  had `minifyEnabled` + `shrinkResources` + the proguard files; this
+  PR adds explicit `isDebuggable = false` and extends
+  `proguard-rules.pro` (`-keepattributes Signature` and a keep for
+  `com.rcsolutions.rcosmobile.data.**`, whose @Serializable response
+  types are decoded with reified `decodeFromString<T>`). No release
+  signing config is added — CI builds debug only.
+- Manifest hardening — `allowBackup="false"` (was true). New
+  `res/xml/network_security_config.xml` blocks cleartext app-wide.
+  No certificate pinning: Railway serves Let's Encrypt certificates
+  that rotate, so a leaf pin would break the app on rotation.
+- Unused permissions/services — `FOREGROUND_SERVICE_MEDIA_PROJECTION`
+  and LiveKit's `ScreenCaptureService`
+  (`io.livekit.android.room.track.screencapture.ScreenCaptureService`)
+  arrive merged from the livekit-android v2.30.0 library manifest and
+  exist only for screen sharing, which this app never uses (verified:
+  no `setScreenShareEnabled` call anywhere; confirmed the exact
+  names against the library's own manifest). Removed with
+  `tools:node="remove"`. CAMERA also arrives from LiveKit but is
+  KEPT — the AI Assistant's camera pill uses `TakePicturePreview`,
+  so the audit's "unused" claim does not hold for this app.
+  `FOREGROUND_SERVICE` (also from LiveKit) is left in place — a
+  normal permission, and removing it would risk any LiveKit
+  foreground-service path.
+- Hide outbound calling until configured — the dialpad, the bottom
+  "Make a Call" button, and the empty-state "+ Make a Call" action
+  are hidden when the outbound-status check reports the trunk
+  unconfigured, instead of showing the Vonage setup error to end
+  users. Unknown status (never fetched / fetch failed) fails OPEN:
+  the dialer stays visible. Ryan's trunk IS configured, so the
+  dialer stays visible for him. The call-back rows are NOT gated —
+  they open the phone's own dialer (ACTION_DIAL), which does not use
+  the trunk. The ViewModel's dial-time status check stays as a
+  backstop.
+
+### Console steps owed after merge (not code — do NOT attempt in a PR)
+
+1. Firebase console → Project Settings → General → the Android app
+   (`com.rcsolutions.rcosmobile`) → restrict the API key by Android
+   app (package + SHA-1).
+2. Firebase console → Project Settings → App Check → enforce App
+   Check on Firestore and on Firebase AI Logic (currently Monitoring /
+   Basic Enforced respectively — confirm the enforcement state before
+   flipping anything, and register the debug token first or the debug
+   builds will be rejected).
+
+### Phone test (Phase 1, after merge + install of the main APK)
+
+1. Sign out → sign back in as the same user → the app shows fresh
+   state (no stale jobs/customers/chat from before sign-out); the
+   business, customers, and call log load normally.
+2. Lock the phone → call +1 470 596 9505 from another phone → the
+   alert still wakes the phone (proves the Application App Check
+   install did not break push).
+3. Calls → the dialpad and "Make a Call" are visible and the dialer
+   still works for Ryan (trunk configured); dial his own number →
+   in-app call screen, other phone rings showing +1 747 313 5541.
+4. Release build type exists in `app/build.gradle.kts` but is NOT
+   CI-tested (CI builds debug only) — do not ship a release APK
+   from this PR without a phone test of a release build first.

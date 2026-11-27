@@ -68,7 +68,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.rcsolutions.rcosmobile.data.LiveCall
-import com.rcsolutions.rcosmobile.data.OUTBOUND_SETUP_MESSAGE
 import com.rcsolutions.rcosmobile.data.OutboundStatus
 import com.rcsolutions.rcosmobile.data.ServerPhoneCall
 import com.rcsolutions.rcosmobile.data.parseIso8601ToTimestamp
@@ -222,11 +221,20 @@ fun CallsScreen(
         // never pretends a call started.
     }
 
-    // Outbound trunk status, refreshed whenever the business changes —
-    // the dialpad shows the honest setup note when it is not configured.
+    // Outbound trunk status, refreshed whenever the business changes.
     LaunchedEffect(business?.id) {
         onRefreshOutboundStatus()
     }
+
+    // Audit Phase 1 — hide outbound dialing entirely when the server
+    // reports the trunk unconfigured, instead of showing the Vonage
+    // setup error to end users. Unknown status (null — never fetched
+    // or the fetch failed) fails OPEN: the dialer stays visible
+    // until the server positively says it is not configured. (Ryan's
+    // trunk IS configured, so the dialer stays visible for him.)
+    // The call-back rows below are NOT gated: they open the phone's
+    // own dialer (ACTION_DIAL), which does not use the trunk.
+    val outboundDialingAvailable = outboundStatus?.configured != false
 
     val aiEnabled = business?.aiReceptionistEnabled ?: true
 
@@ -548,8 +556,13 @@ fun CallsScreen(
                         icon = Icons.Outlined.Phone,
                         title = "No calls logged yet",
                         subtitle = "Tap + Make a Call below to dial a customer via your phone app and log the outcome.",
-                        actionLabel = "+ Make a Call",
-                        onActionClick = { dialpadPrefill = ""; showMakeCallDialog = true }
+                        // Audit Phase 1 — no dial entry when the trunk
+                        // is unconfigured (see outboundDialingAvailable
+                        // above); the empty state itself stays.
+                        actionLabel = if (outboundDialingAvailable) "+ Make a Call" else null,
+                        onActionClick = if (outboundDialingAvailable) {
+                            { dialpadPrefill = ""; showMakeCallDialog = true }
+                        } else null
                     )
                 }
             } else {
@@ -622,30 +635,22 @@ fun CallsScreen(
         // Dialing a number and tapping the call button opens the Dial &
         // Log dialog prefilled with it; name and note stay editable
         // there before the in-app call starts. The call is logged as
-        // outbound when it ends.
-        DialpadCard(
-            dialedNumber = dialedNumber,
-            onKeyPress = { key ->
-                if (dialedNumber.length < 15) dialedNumber += key
-            },
-            onBackspace = {
-                if (dialedNumber.isNotEmpty()) dialedNumber = dialedNumber.dropLast(1)
-            },
-            onCall = {
-                dialpadPrefill = dialedNumber
-                showMakeCallDialog = true
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-        // Outbound dialer status: an honest setup note when the server
-        // cannot dial out, and the real error when a dial fails — never
-        // a fake connected state.
-        if (outboundStatus != null && !outboundStatus.configured) {
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = OUTBOUND_SETUP_MESSAGE,
-                style = MaterialTheme.typography.bodyMedium,
-                color = AuroraAmber,
+        // outbound when it ends. Hidden entirely (Audit Phase 1) when
+        // the server reports the trunk unconfigured — no dialpad, no
+        // setup error shown to end users.
+        if (outboundDialingAvailable) {
+            DialpadCard(
+                dialedNumber = dialedNumber,
+                onKeyPress = { key ->
+                    if (dialedNumber.length < 15) dialedNumber += key
+                },
+                onBackspace = {
+                    if (dialedNumber.isNotEmpty()) dialedNumber = dialedNumber.dropLast(1)
+                },
+                onCall = {
+                    dialpadPrefill = dialedNumber
+                    showMakeCallDialog = true
+                },
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -669,13 +674,16 @@ fun CallsScreen(
         }
         Spacer(Modifier.height(10.dp))
 
-        // Bottom Dual CTAs matching Screen 3
-        AuroraPrimaryCta(
-            text = "Make a Call",
-            icon = Icons.Outlined.Add,
-            testTag = "calls_make_call_button",
-            onClick = { dialpadPrefill = ""; showMakeCallDialog = true }
-        )
+        // Bottom Dual CTAs matching Screen 3. Hidden (Audit Phase 1)
+        // when the trunk is unconfigured — same gate as the dialpad.
+        if (outboundDialingAvailable) {
+            AuroraPrimaryCta(
+                text = "Make a Call",
+                icon = Icons.Outlined.Add,
+                testTag = "calls_make_call_button",
+                onClick = { dialpadPrefill = ""; showMakeCallDialog = true }
+            )
+        }
     }
 
     if (showMakeCallDialog) {
