@@ -64,8 +64,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,6 +75,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rcsolutions.rcosmobile.data.LocalPrefsState
 import com.rcsolutions.rcosmobile.data.RcosDefaults
+import com.rcsolutions.rcosmobile.data.TeamInviteResponse
 import com.rcsolutions.rcosmobile.model.AIEmployee
 import com.rcsolutions.rcosmobile.model.ActionRecord
 import com.rcsolutions.rcosmobile.model.AgentSettings
@@ -127,6 +130,14 @@ fun AccountScreen(
     onUpdateBusiness: (Map<String, Any>, String) -> Unit,
     onSaveUserProfile: (String, String, String) -> Unit = { _, _, _ -> },
     onAddTeamMember: (String, String, String) -> Unit = { _, _, _ -> },
+    // Team invite codes (Nov 27) — owner generates a code, the new
+    // member joins with it from the setup screen.
+    pendingInvites: List<TeamInviteResponse> = emptyList(),
+    generatedInviteCode: String? = null,
+    onCreateInvite: (String) -> Unit = {},
+    onRevokeInvite: (String) -> Unit = {},
+    onFetchInvites: () -> Unit = {},
+    onClearGeneratedCode: () -> Unit = {},
     onToggleEmployee: (String, Boolean) -> Unit,
     onSaveAgentSettings: (String, AgentSettings) -> Unit,
     onToggleAutomationMaster: (Boolean) -> Unit,
@@ -819,7 +830,14 @@ fun AccountScreen(
                         messages = teamMessages,
                         currentUserId = currentUserId,
                         members = business?.members.orEmpty(),
+                        isOwner = business?.ownerId == currentUserId,
+                        pendingInvites = pendingInvites,
+                        generatedInviteCode = generatedInviteCode,
                         onAddMember = onAddTeamMember,
+                        onCreateInvite = onCreateInvite,
+                        onRevokeInvite = onRevokeInvite,
+                        onFetchInvites = onFetchInvites,
+                        onClearGeneratedCode = onClearGeneratedCode,
                         onSend = onSendTeamMessage,
                         onClose = { activeModal = AccountModal.NONE }
                     )
@@ -1026,12 +1044,21 @@ private fun TeamChatThread(
     messages: List<TeamMessage>,
     currentUserId: String,
     members: List<BusinessMember> = emptyList(),
+    isOwner: Boolean = false,
+    pendingInvites: List<TeamInviteResponse> = emptyList(),
+    generatedInviteCode: String? = null,
     onAddMember: (String, String, String) -> Unit = { _, _, _ -> },
+    onCreateInvite: (String) -> Unit = {},
+    onRevokeInvite: (String) -> Unit = {},
+    onFetchInvites: () -> Unit = {},
+    onClearGeneratedCode: () -> Unit = {},
     onSend: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
     var showAddMember by remember { mutableStateOf(false) }
+    var showInviteByCode by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
     val sorted = remember(messages) {
         messages.sortedBy { it.createdAt?.toDate()?.time ?: 0L }
     }
@@ -1083,6 +1110,17 @@ private fun TeamChatThread(
             )
             TextButton(onClick = { showAddMember = true }) {
                 Text("+ Add Member", color = AuroraEmerald)
+            }
+            // Invite by code (Nov 27) — owner-only. The code is the
+            // credential: the new member joins with it from the setup
+            // screen, and the owner can revoke it while it is pending.
+            if (isOwner) {
+                TextButton(onClick = {
+                    onFetchInvites()
+                    showInviteByCode = true
+                }) {
+                    Text("Invite by Code", color = AuroraEmerald)
+                }
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -1220,6 +1258,95 @@ private fun TeamChatThread(
             dismissButton = {
                 TextButton(onClick = { showAddMember = false }) {
                     Text("Cancel", color = AuroraTextSecondary)
+                }
+            }
+        )
+    }
+
+    // Invite by code (Nov 27) — owner generates a code and shares it;
+    // the new member joins with it from the setup screen. A code made
+    // for an email only works for that email; a code with no email
+    // works for anyone who has it. Codes expire after 7 days.
+    if (showInviteByCode) {
+        var inviteEmail by remember { mutableStateOf("") }
+        var copiedCode by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = {
+                showInviteByCode = false
+                onClearGeneratedCode()
+            },
+            containerColor = AuroraCardElevated,
+            title = { Text("Invite by Code", color = AuroraTextPrimary) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(value = inviteEmail, onValueChange = { inviteEmail = it }, label = { Text("Email (optional)") }, singleLine = true, colors = auroraFieldColors())
+                    Text(
+                        "When set, only that email can use the code. Leave it blank and anyone with the code can join.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AuroraTextSecondary
+                    )
+                    if (generatedInviteCode != null) {
+                        Text(
+                            text = generatedInviteCode,
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = AuroraEmerald,
+                            modifier = Modifier.testTag("invite_code_value")
+                        )
+                        TextButton(onClick = {
+                            clipboard.setText(AnnotatedString(generatedInviteCode))
+                            copiedCode = generatedInviteCode
+                        }) {
+                            Text(
+                                if (copiedCode == generatedInviteCode) "Copied" else "Copy code",
+                                color = AuroraEmerald
+                            )
+                        }
+                        Text(
+                            "Share this code with your new team member — they enter it on the setup screen. It expires in 7 days.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraTextSecondary
+                        )
+                    }
+                    if (pendingInvites.isNotEmpty()) {
+                        Text(
+                            "Pending invites",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = AuroraTextPrimary
+                        )
+                        pendingInvites.forEach { invite ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${invite.code} — ${invite.email?.ifBlank { "anyone" } ?: "anyone"}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AuroraTextSecondary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { onRevokeInvite(invite.code) }) {
+                                    Text("Revoke", color = AuroraRed)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { onCreateInvite(inviteEmail.trim()) }) {
+                    Text("Generate code", color = AuroraEmerald)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showInviteByCode = false
+                    onClearGeneratedCode()
+                }) {
+                    Text("Done", color = AuroraTextSecondary)
                 }
             }
         )

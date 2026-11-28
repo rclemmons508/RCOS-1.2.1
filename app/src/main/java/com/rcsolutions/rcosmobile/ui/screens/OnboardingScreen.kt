@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -116,9 +117,22 @@ fun OnboardingScreen(
         servesCommercial: Boolean
     ) -> Unit,
     onCancel: () -> Unit,
+    // Join a company with an invite code (Nov 27) — the alternative
+    // to creating a workspace: the owner shares a code, the employee
+    // enters it here and joins the team instead of setting up a new
+    // company. The signed-in user's email, prefilled for the join.
+    defaultEmail: String = "",
+    onJoinWithCode: (String, String, String) -> Unit = { _, _, _ -> },
+    // Email verification (Nov 27, email login) — when false, the join
+    // dialog tells the user to verify their email first (the link was
+    // sent at sign-up) and offers to resend it. Google users are
+    // always verified, so this only ever shows for email sign-ups.
+    isEmailVerified: Boolean = true,
+    onResendVerification: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var step by remember { mutableIntStateOf(1) }
+    var showJoinDialog by remember { mutableStateOf(false) }
     var docOrDescription by remember { mutableStateOf("") }
     var attachedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var attachedDocLabel by remember { mutableStateOf<String?>(null) }
@@ -356,6 +370,15 @@ fun OnboardingScreen(
                         text = "Skip for now — Pick Trade Manually",
                         testTag = "onboarding_skip_ai",
                         onClick = { step = 2 }
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    // Join a company with an invite code (Nov 27) —
+                    // for employees whose owner already set the
+                    // company up: no new workspace, just join the team.
+                    AuroraSecondaryCta(
+                        text = "Join a company with an invite code",
+                        testTag = "onboarding_join_with_code",
+                        onClick = { showJoinDialog = true }
                     )
                 }
 
@@ -708,6 +731,71 @@ fun OnboardingScreen(
                 }
             }
         }
+    }
+
+    // Join a company with an invite code (Nov 27) — the employee
+    // enters the code the owner shared, plus their name and email.
+    // On success the workspace list re-reads and this setup screen
+    // closes on its own (the joined business is no longer empty).
+    // A wrong or expired code shows the server's plain-word error.
+    if (showJoinDialog) {
+        var joinCode by remember { mutableStateOf("") }
+        var joinName by remember { mutableStateOf(defaultOwnerName) }
+        var joinEmail by remember { mutableStateOf(defaultEmail) }
+        AlertDialog(
+            onDismissRequest = { showJoinDialog = false },
+            containerColor = AuroraCardElevated,
+            title = { Text("Join a Company", color = AuroraTextPrimary) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(value = joinCode, onValueChange = { joinCode = it }, label = { Text("Invite code") }, singleLine = true, colors = auroraFieldColors(), modifier = Modifier.testTag("join_code_input"))
+                    OutlinedTextField(value = joinName, onValueChange = { joinName = it }, label = { Text("Your name") }, singleLine = true, colors = auroraFieldColors())
+                    OutlinedTextField(value = joinEmail, onValueChange = { joinEmail = it }, label = { Text("Your email") }, singleLine = true, colors = auroraFieldColors())
+                    Text(
+                        "Ask your company owner for the code. If the code was made for your email, use that same email here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AuroraTextSecondary
+                    )
+                    // Email verification (Nov 27, email login) — an
+                    // unverified user can't join yet: the company
+                    // wouldn't appear (the memberEmails query is
+                    // skipped until the email is verified). Say so
+                    // plainly here and offer the resend, instead of
+                    // letting the join post and show nothing. The
+                    // Join button still works — it reloads the user
+                    // first, so a link tapped just now in the inbox
+                    // is picked up.
+                    if (!isEmailVerified) {
+                        Text(
+                            "Verify your email first — we sent you a link when you signed up. Your company won't appear until your email is verified.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraTextSecondary
+                        )
+                        TextButton(onClick = onResendVerification) {
+                            Text("Resend verification email", color = AuroraEmerald)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (joinCode.isNotBlank() && joinName.isNotBlank() && joinEmail.isNotBlank()) {
+                        onJoinWithCode(joinCode.trim(), joinName.trim(), joinEmail.trim())
+                        showJoinDialog = false
+                    }
+                }) {
+                    Text("Join", color = AuroraEmerald)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showJoinDialog = false }) {
+                    Text("Cancel", color = AuroraTextSecondary)
+                }
+            }
+        )
     }
 }
 

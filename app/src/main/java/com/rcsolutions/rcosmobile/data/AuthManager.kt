@@ -13,7 +13,9 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseNetworkException
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
@@ -141,6 +143,164 @@ private fun signInErrorMessage(e: Exception): String {
     val detail = e.localizedMessage?.takeIf { it.isNotBlank() }
     return if (detail != null) "Google Sign-In failed: $detail"
     else "Google Sign-In failed (${e::class.simpleName ?: "unknown error"}). Please try again."
+}
+
+// ---- Email + password auth (Nov 27) ----
+// The login page was Google-only. Email/password uses the same Firebase
+// Auth project, so the server gate (Firebase ID token) and the
+// onboarding flow work exactly as they do for Google users: a brand-new
+// email account has no business yet and lands on the same setup flow.
+// Sign-up sends a verification email (best-effort, never fails the
+// sign-up). There is no sign-in gate — an unverified user can still
+// sign in and see their own businesses — but the workspace list's
+// memberEmails query is skipped until verified (see
+// RcosRepository.observeBusinesses) and joining a company with an
+// invite code needs a verified email. Error text is plain
+// words only — never a Firebase error code or message.
+
+private fun emailAuthErrorMessage(e: Exception, isSignUp: Boolean): String {
+    if (e is FirebaseNetworkException) {
+        return "No connection. Check your connection and try again."
+    }
+    if (e is TimeoutCancellationException) {
+        return "Sign-in timed out. Check your connection and try again."
+    }
+    if (e is FirebaseAuthException) {
+        return when (e.errorCode) {
+            "ERROR_INVALID_EMAIL" -> "That email doesn't look right."
+            "ERROR_WRONG_PASSWORD" -> "Wrong password. Try again, or reset it below."
+            "ERROR_USER_NOT_FOUND" ->
+                if (isSignUp) "Couldn't create the account. Please try again."
+                else "No account with that email. Create one below."
+            "ERROR_EMAIL_ALREADY_IN_USE" -> "An account with that email already exists. Sign in instead."
+            "ERROR_WEAK_PASSWORD" -> "Choose a stronger password — at least 6 characters."
+            "ERROR_USER_DISABLED" -> "That account is disabled. Contact support for help."
+            "ERROR_TOO_MANY_REQUESTS" -> "Too many attempts. Wait a bit and try again."
+            "ERROR_OPERATION_NOT_ALLOWED" -> "Email sign-in isn't turned on for this app yet."
+            else -> if (isSignUp) "Couldn't create the account. Please try again."
+            else "Sign-in failed. Please try again."
+        }
+    }
+    return if (isSignUp) "Couldn't create the account. Please try again."
+    else "Sign-in failed. Please try again."
+}
+
+fun signInWithEmail(
+    email: String,
+    password: String,
+    onAuthSuccess: () -> Unit,
+    onAuthError: (String) -> Unit,
+    scope: CoroutineScope
+) {
+    scope.launch {
+        try {
+            withTimeout(SIGN_IN_TIMEOUT_MS) {
+                Firebase.auth.signInWithEmailAndPassword(email.trim(), password).await()
+                onAuthSuccess()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Email sign-in failed", e)
+            onAuthError(emailAuthErrorMessage(e, isSignUp = false))
+        }
+    }
+}
+
+fun signUpWithEmail(
+    email: String,
+    password: String,
+    onAuthSuccess: () -> Unit,
+    onAuthError: (String) -> Unit,
+    scope: CoroutineScope
+) {
+    scope.launch {
+        try {
+            withTimeout(SIGN_IN_TIMEOUT_MS) {
+                Firebase.auth.createUserWithEmailAndPassword(email.trim(), password).await()
+                // Send the verification email (best-effort): the account
+                // works without it, but the workspace list's memberEmails
+                // query is denied until the email is verified (the rules'
+                // callerEmail() is '' for unverified users — see
+                // RcosRepository.observeBusinesses), and joining a company
+                // with an invite code needs a verified email. A failed
+                // send must never fail the sign-up itself, so it is
+                // caught here and only logged.
+                try {
+                    Firebase.auth.currentUser?.sendEmailVerification()?.await()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Verification email failed to send", e)
+                }
+                onAuthSuccess()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Email sign-up failed", e)
+            onAuthError(emailAuthErrorMessage(e, isSignUp = true))
+        }
+    }
+}
+
+// Forgot password: the confirmation is always the same, whether or
+// not an account exists for that email — never reveal which it is.
+fun sendPasswordReset(
+    email: String,
+    onSent: () -> Unit,
+    onError: (String) -> Unit,
+    scope: CoroutineScope
+) {
+    scope.launch {
+        try {
+            withTimeout(SIGN_IN_TIMEOUT_MS) {
+                Firebase.auth.sendPasswordResetEmail(email.trim()).await()
+                onSent()
+            }
+        } catch (e: Exception) {
+            if (e is FirebaseAuthException && e.errorCode == "ERROR_USER_NOT_FOUND") {
+                onSent()
+            } else {
+                Log.w(TAG, "Password reset failed", e)
+                onError(
+                    when {
+                        e is FirebaseNetworkException -> "No connection. Check your connection and try again."
+                        e is FirebaseAuthException && e.errorCode == "ERROR_INVALID_EMAIL" ->
+                            "That email doesn't look right."
+                        else -> "Couldn't send the reset email. Please try again."
+                    }
+                )
+            }
+        }
+    }
+}
+
+// Resend the sign-up verification email. Unlike the send inside
+// signUpWithEmail (best-effort, silent), the caller here needs to
+// know whether it went out — the join dialog offers this action when
+// the user is unverified.
+fun resendVerificationEmail(
+    onSent: () -> Unit,
+    onError: (String) -> Unit,
+    scope: CoroutineScope
+) {
+    scope.launch {
+        try {
+            val user = Firebase.auth.currentUser
+            if (user == null) {
+                onError("Sign in first, then ask for a new verification email.")
+                return@launch
+            }
+            withTimeout(SIGN_IN_TIMEOUT_MS) {
+                user.sendEmailVerification().await()
+                onSent()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Verification email resend failed", e)
+            onError(
+                when {
+                    e is FirebaseNetworkException -> "No connection. Check your connection and try again."
+                    e is TimeoutCancellationException -> "Timed out. Check your connection and try again."
+                    else -> "Couldn't send the verification email. Please try again."
+                }
+            )
+        }
+    }
 }
 
 fun signOut(

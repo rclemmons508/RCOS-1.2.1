@@ -298,6 +298,13 @@ private fun AuthenticatedAuroraShell(
     val localPrefs by viewModel.localPrefs.collectAsStateWithLifecycle()
     val businessesState by viewModel.businessesState.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
+    // Team invite codes (Nov 27) — pending invites + the code the
+    // owner just generated, for the team dialog on Account.
+    val pendingInvites by viewModel.pendingInvites.collectAsStateWithLifecycle()
+    val generatedInviteCode by viewModel.generatedInviteCode.collectAsStateWithLifecycle()
+    // Email verification (Nov 27, email login) — the join dialog
+    // shows the verify-first message from this when unverified.
+    val isEmailVerified by viewModel.isEmailVerified.collectAsStateWithLifecycle()
     val weatherState by viewModel.weatherState.collectAsStateWithLifecycle()
     val jobsState by viewModel.jobsState.collectAsStateWithLifecycle()
     val customersState by viewModel.customersState.collectAsStateWithLifecycle()
@@ -496,7 +503,18 @@ private fun AuthenticatedAuroraShell(
                     dismissedEmptyOnboarding = true
                 }
                 viewModel.clearOnboardingExtraction()
-            }
+            },
+            // Join a company with an invite code (Nov 27) — the
+            // employee joins the team instead of setting up a company.
+            defaultEmail = viewModel.currentUserEmail,
+            onJoinWithCode = { code, name, email ->
+                viewModel.joinTeamWithCode(code, name, email)
+            },
+            // Email verification (Nov 27, email login) — the join
+            // dialog tells an unverified user to verify first and
+            // offers the resend action.
+            isEmailVerified = isEmailVerified,
+            onResendVerification = { viewModel.resendVerificationEmail() }
         )
         return
     }
@@ -863,6 +881,19 @@ private fun AuthenticatedAuroraShell(
                                     onAddTeamMember = { name, email, phone ->
                                         viewModel.addTeamMember(name, email, phone)
                                     },
+                                    // Team invite codes (Nov 27) — owner
+                                    // generates a code, the new member
+                                    // joins with it from setup.
+                                    pendingInvites = pendingInvites,
+                                    generatedInviteCode = generatedInviteCode,
+                                    onCreateInvite = { email ->
+                                        viewModel.createInviteCode(email)
+                                    },
+                                    onRevokeInvite = { code ->
+                                        viewModel.revokeInviteCode(code)
+                                    },
+                                    onFetchInvites = { viewModel.fetchPendingInvites() },
+                                    onClearGeneratedCode = { viewModel.clearGeneratedInviteCode() },
                                     onToggleEmployee = { id, enabled -> viewModel.toggleEmployee(id, enabled) },
                                     onSaveAgentSettings = { id, settings -> viewModel.updateAgentSettings(id, settings) },
                                     onToggleAutomationMaster = { viewModel.toggleAutomationMaster(it) },

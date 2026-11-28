@@ -6,6 +6,8 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.rcsolutions.rcosmobile.data.AiRepository
 import com.rcsolutions.rcosmobile.data.DocumentInput
@@ -23,6 +25,7 @@ import com.rcsolutions.rcosmobile.data.LiveCall
 import com.rcsolutions.rcosmobile.data.ServerApiClient
 import com.rcsolutions.rcosmobile.data.ServerPhoneCall
 import com.rcsolutions.rcosmobile.data.ServerStatus
+import com.rcsolutions.rcosmobile.data.TeamInviteResponse
 import com.rcsolutions.rcosmobile.data.LiveKitVoiceManager
 import com.rcsolutions.rcosmobile.data.OUTBOUND_SETUP_MESSAGE
 import com.rcsolutions.rcosmobile.data.OutboundCallManager
@@ -32,6 +35,7 @@ import com.rcsolutions.rcosmobile.data.MODEL_LIVEKIT_VOICE
 import com.rcsolutions.rcosmobile.data.LocalPrefsState
 import com.rcsolutions.rcosmobile.data.RcosDefaults
 import com.rcsolutions.rcosmobile.data.RcosRepository
+import com.rcsolutions.rcosmobile.data.resendVerificationEmail as resendAuthVerificationEmail
 import com.rcsolutions.rcosmobile.data.UserPreferencesRepository
 import com.rcsolutions.rcosmobile.data.WeatherService
 import com.rcsolutions.rcosmobile.data.toBusinessSyncRequest
@@ -93,6 +97,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -130,6 +135,26 @@ class MainViewModel(
     val localPrefs: StateFlow<LocalPrefsState> = prefsRepo.prefsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), LocalPrefsState())
 
+    // Whether the signed-in user's email is verified (Nov 27, email
+    // login). Google sign-ins always carry a verified email; a
+    // brand-new email/password user is unverified until they tap the
+    // link sent at sign-up. The join dialog shows the verify-first
+    // message from this, and joinTeamWithCode refreshes it after a
+    // reload before posting the join.
+    private val _isEmailVerified =
+        MutableStateFlow(Firebase.auth.currentUser?.isEmailVerified == true)
+    val isEmailVerified: StateFlow<Boolean> = _isEmailVerified.asStateFlow()
+
+    /** Resend the sign-up verification email (Nov 27, email login) —
+     *  offered from the join dialog when the user is unverified. */
+    fun resendVerificationEmail() {
+        resendAuthVerificationEmail(
+            onSent = { _bannerMessage.value = "Verification email sent. Check your inbox." },
+            onError = { message -> _bannerMessage.value = message },
+            scope = viewModelScope
+        )
+    }
+
     private val reloadTrigger = MutableStateFlow(0)
 
     /** 8 fixes Nov 26 (item 4) — bumping this re-subscribes the AI
@@ -144,7 +169,7 @@ class MainViewModel(
 
     val businessesState: StateFlow<UiState<List<BusinessAccount>>> =
         reloadTrigger.flatMapLatest {
-            repository.observeBusinesses(currentUserId)
+            repository.observeBusinesses(currentUserId, currentUserEmail)
                 .mapToUiState("Failed to load business workspaces")
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
 
@@ -358,6 +383,16 @@ class MainViewModel(
 
     private val _bannerMessage = MutableStateFlow<String?>(null)
     val bannerMessage: StateFlow<String?> = _bannerMessage.asStateFlow()
+
+    // ---- Team invite codes (Nov 27) ----
+    // Pending invites for the active business (owner only) and the
+    // code the owner just generated, shown in the team dialog until
+    // it is dismissed.
+    private val _pendingInvites = MutableStateFlow<List<TeamInviteResponse>>(emptyList())
+    val pendingInvites: StateFlow<List<TeamInviteResponse>> = _pendingInvites.asStateFlow()
+
+    private val _generatedInviteCode = MutableStateFlow<String?>(null)
+    val generatedInviteCode: StateFlow<String?> = _generatedInviteCode.asStateFlow()
 
     private val _isMutating = MutableStateFlow(false)
     val isMutating: StateFlow<Boolean> = _isMutating.asStateFlow()
@@ -2318,6 +2353,138 @@ class MainViewModel(
             ),
             successMsg = "$cleanName added to the team."
         )
+    }
+
+    // ---- Team invite codes (Nov 27) ----
+    // The server already has the full invite flow: the owner creates a
+    // code (POST /api/business/:id/team/invites), the employee joins
+    // with it (POST /api/team/join), the owner can revoke it. The
+    // client only wires it up.
+    //
+    // How the join becomes visible: the server's join only adds a
+    // roster entry — it never records the member's Firebase UID — so
+    // the memberUids query cannot surface a joined business. When the
+    // owner creates an invite for an email, the app also records that
+    // email in the business's memberEmails map (owner-only update,
+    // same as Add Member), and the business list has a memberEmails
+    // query for it. An open invite (no email) needs the owner to add
+    // the member's email separately before the business appears for
+    // them.
+
+    fun fetchPendingInvites() {
+        val biz = activeBusiness.value ?: return
+        if (biz.ownerId != currentUserId) return
+        viewModelScope.launch {
+            when (val result = serverApi.fetchTeam(biz.id)) {
+                is ApiResult.Success -> _pendingInvites.value = result.data.invites
+                is ApiResult.HttpError -> _bannerMessage.value = result.message
+                is ApiResult.NetworkError -> _bannerMessage.value = result.message
+            }
+        }
+    }
+
+    fun createInviteCode(email: String) {
+        val biz = activeBusiness.value ?: return
+        if (biz.ownerId != currentUserId) {
+            _bannerMessage.value = "Only the business owner can invite people."
+            return
+        }
+        val cleanEmail = email.trim().lowercase()
+        viewModelScope.launch {
+            when (val result = serverApi.createInvite(biz.id, cleanEmail)) {
+                is ApiResult.Success -> {
+                    _generatedInviteCode.value = result.data.invite.code
+                    fetchPendingInvites()
+                    if (cleanEmail.isNotBlank()) {
+                        // Record the invited email so the member can
+                        // see the business after joining with the code.
+                        val memberEmails = biz.memberEmails.toMutableMap().apply {
+                            put(cleanEmail, "member")
+                        }
+                        updateBusinessProfile(
+                            mapOf("memberEmails" to memberEmails),
+                            successMsg = "Invite code ready — share it with $cleanEmail."
+                        )
+                    } else {
+                        _bannerMessage.value = "Invite code ready — share it with your new team member."
+                    }
+                }
+                is ApiResult.HttpError -> _bannerMessage.value = result.message
+                is ApiResult.NetworkError -> _bannerMessage.value = result.message
+            }
+        }
+    }
+
+    fun revokeInviteCode(code: String) {
+        val biz = activeBusiness.value ?: return
+        if (biz.ownerId != currentUserId) return
+        viewModelScope.launch {
+            when (val result = serverApi.revokeInvite(biz.id, code)) {
+                is ApiResult.Success -> {
+                    fetchPendingInvites()
+                    _bannerMessage.value = "Invite revoked."
+                }
+                is ApiResult.HttpError -> _bannerMessage.value = result.message
+                is ApiResult.NetworkError -> _bannerMessage.value = result.message
+            }
+        }
+    }
+
+    fun clearGeneratedInviteCode() {
+        _generatedInviteCode.value = null
+    }
+
+    // Employee side: join a company with an invite code. Runs from the
+    // onboarding screen, where a signed-in user with no business yet
+    // lands. On success the workspace list is re-read, so the joined
+    // business appears in the switcher and onboarding closes on its
+    // own (businesses no longer empty). The server's errors are
+    // already plain words ("That invite code is not valid...").
+    //
+    // Verification first (Nov 27, email login): the user is reloaded
+    // before posting, so an email verified just now in the inbox is
+    // picked up. Joining needs a verified email — without it the
+    // business can't appear in the switcher (the memberEmails query
+    // is skipped for unverified users, see
+    // RcosRepository.observeBusinesses) — so an unverified user gets
+    // the plain-words message and the join is never posted, instead
+    // of a silent success that shows no company.
+    fun joinTeamWithCode(code: String, fullName: String, email: String) {
+        val cleanCode = code.trim()
+        val cleanName = fullName.trim()
+        val cleanEmail = email.trim().lowercase()
+        if (cleanCode.isBlank() || cleanName.isBlank() || cleanEmail.isBlank()) {
+            _bannerMessage.value = "Enter the invite code, your name, and your email."
+            return
+        }
+        viewModelScope.launch {
+            try {
+                Firebase.auth.currentUser?.reload()?.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Reload before join failed", e)
+            }
+            _isEmailVerified.value = Firebase.auth.currentUser?.isEmailVerified == true
+            if (Firebase.auth.currentUser?.isEmailVerified == false) {
+                _bannerMessage.value =
+                    "Verify your email first — we sent you a verification link when you signed up. Check your inbox, then try joining again."
+                return@launch
+            }
+            when (val result = serverApi.joinTeam(cleanCode, cleanName, cleanEmail)) {
+                is ApiResult.Success -> {
+                    val name = result.data.business?.name?.ifBlank { "the company" } ?: "the company"
+                    _bannerMessage.value = if (result.data.alreadyMember) {
+                        "You're already on the $name team."
+                    } else {
+                        "Welcome to $name!"
+                    }
+                    retryLoadWorkspaces()
+                }
+                is ApiResult.HttpError -> _bannerMessage.value = result.message
+                is ApiResult.NetworkError -> _bannerMessage.value = result.message
+            }
+        }
     }
 
     fun dismissAgentMessage(id: String) {

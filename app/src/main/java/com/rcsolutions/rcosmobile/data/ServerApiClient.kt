@@ -198,6 +198,82 @@ data class OutboundStatus(
     val trunkConfigured: Boolean = false,
 )
 
+// ---- Team invites (Nov 27) ----
+// Shapes copied from the old server (server.ts): the owner creates a
+// code, the employee joins with it, the owner can revoke it.
+
+/** One roster row from GET /api/business/:id/team. */
+@Serializable
+data class TeamMemberResponse(
+    val userId: String = "",
+    val email: String = "",
+    val name: String = "",
+    val role: String = "member",
+    val joinedAt: String = "",
+)
+
+/** One pending invite from GET /api/business/:id/team. Only the owner
+ * sees the codes (`invites` is empty for members). */
+@Serializable
+data class TeamInviteResponse(
+    val code: String = "",
+    val businessId: String = "",
+    val businessName: String = "",
+    val email: String? = null,
+    val role: String = "member",
+    val createdAt: String = "",
+    val expiresAt: String = "",
+    val used: Boolean = false,
+    val revoked: Boolean = false,
+)
+
+/** GET /api/business/:id/team response — roster + pending invites. */
+@Serializable
+data class TeamResponse(
+    val businessId: String = "",
+    val businessName: String = "",
+    val members: List<TeamMemberResponse> = emptyList(),
+    val invites: List<TeamInviteResponse> = emptyList(),
+    val isOwner: Boolean = false,
+)
+
+/** POST /api/business/:id/team/invites request. `email` is optional:
+ * when set, only that email can use the code. */
+@Serializable
+data class CreateInviteRequest(
+    val email: String = "",
+)
+
+/** POST /api/business/:id/team/invites response (201). */
+@Serializable
+data class CreateInviteResponse(
+    val invite: TeamInviteResponse = TeamInviteResponse(),
+)
+
+/** POST /api/team/join request. The server uppercases the code itself. */
+@Serializable
+data class JoinTeamRequest(
+    val code: String,
+    val fullName: String,
+    val email: String,
+)
+
+/** The joined company, as returned by POST /api/team/join. Only the
+ * id + name are needed here — the business list itself comes from the
+ * Firestore re-read after join. */
+@Serializable
+data class JoinedBusiness(
+    val id: String = "",
+    val name: String = "",
+)
+
+/** POST /api/team/join response. */
+@Serializable
+data class JoinTeamResponse(
+    val business: JoinedBusiness? = null,
+    val alreadyMember: Boolean = false,
+)
+
 /** Details the server extracted from an uploaded document
  * (`POST /api/assistant/documents`). `found` lists which fields were
  * found (a list of field names, not a boolean). Text is never sent to
@@ -844,6 +920,47 @@ class ServerApiClient(
             is ApiResult.HttpError -> result
             is ApiResult.NetworkError -> result
         }
+    }
+
+    // ---- Team invites (Nov 27) ----
+    // The server already has the full invite flow (RCOS-MOBILE-APP
+    // server.ts): the owner creates a code, the employee joins with
+    // it, the owner can revoke it. Client-only wiring here.
+
+    /** GET /api/business/:id/team — roster + pending invites (codes
+     * only for the owner). */
+    suspend fun fetchTeam(businessId: String): ApiResult<TeamResponse> =
+        parse(request("GET", "/api/business/${encode(businessId)}/team", requireAuth = true))
+
+    /** POST /api/business/:id/team/invites — owner creates a code.
+     * `email` empty = anyone with the code can join. */
+    suspend fun createInvite(businessId: String, email: String): ApiResult<CreateInviteResponse> {
+        val encoded = json.encodeToString(
+            CreateInviteRequest.serializer(),
+            CreateInviteRequest(email = email.trim().lowercase()),
+        )
+        return parse(request("POST", "/api/business/${encode(businessId)}/team/invites", body = encoded, requireAuth = true))
+    }
+
+    /** DELETE /api/business/:id/team/invites/:code — owner revokes a
+     * pending invite. Any 2xx counts as revoked. */
+    suspend fun revokeInvite(businessId: String, code: String): ApiResult<Unit> =
+        when (val result = request("DELETE", "/api/business/${encode(businessId)}/team/invites/${encode(code)}", requireAuth = true)) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            is ApiResult.HttpError -> result
+            is ApiResult.NetworkError -> result
+        }
+
+    /** POST /api/team/join — join a company with an invite code.
+     * Gate-exempt on the server (the joiner may have no account yet),
+     * so requireAuth = false; the Firebase token is still attached
+     * when the caller is signed in. */
+    suspend fun joinTeam(code: String, fullName: String, email: String): ApiResult<JoinTeamResponse> {
+        val encoded = json.encodeToString(
+            JoinTeamRequest.serializer(),
+            JoinTeamRequest(code = code.trim(), fullName = fullName.trim(), email = email.trim().lowercase()),
+        )
+        return parse(request("POST", "/api/team/join", body = encoded, requireAuth = false))
     }
 
 }
