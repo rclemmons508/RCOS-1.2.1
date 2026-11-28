@@ -73,6 +73,7 @@ import com.rcsolutions.rcosmobile.model.UiState
 import com.rcsolutions.rcosmobile.model.UserProfile
 import com.rcsolutions.rcosmobile.model.VoicemailRecord
 import com.rcsolutions.rcosmobile.model.WeatherSnapshot
+import com.rcsolutions.rcosmobile.security.releaseAppCheckKeyMissing
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -642,6 +643,14 @@ class MainViewModel(
         // app keeps showing cached Firestore data); coming back online
         // re-probes the server automatically.
         refreshServerStatus()
+        // Audit Phase 2 (finding 4) — a release build whose reCAPTCHA
+        // site key is missing from FirebaseOptions has no working App
+        // Check provider. Surface it once as a banner instead of
+        // failing every enforced call silently. Debug builds never
+        // set the flag — they use the debug provider.
+        if (releaseAppCheckKeyMissing) {
+            showBanner("AI features are unavailable in this build — the release App Check key is missing. This needs a fixed build.")
+        }
         // Server business re-sync (old app's PR #58, ported): the
         // server keeps its own business store, wiped on every
         // redeploy, and its login gate refuses a businessId the caller

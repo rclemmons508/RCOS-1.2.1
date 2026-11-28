@@ -14,7 +14,17 @@ private const val TAG = "AppCheckInit"
 private const val DEBUG_TOKEN_EXTRA = "FIREBASE_APPCHECK_DEBUG_TOKEN"
 private const val DEBUG_STORE_PREFIX = "com.google.firebase.appcheck.debug.store."
 private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
-private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
+
+/**
+ * Set when the release reCAPTCHA site key is missing from
+ * FirebaseOptions (see the release branch of [configureAppCheck]).
+ * Read by MainViewModel at startup so the app surfaces a visible
+ * in-app message instead of failing every enforced call silently.
+ * Release-only: debug builds use the debug provider and never set it.
+ */
+@Volatile
+var releaseAppCheckKeyMissing: Boolean = false
+    private set
 
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
@@ -44,23 +54,42 @@ fun configureAppCheck(context: Context, intent: Intent?) {
             )
             Log.d(TAG, "DebugAppCheckProviderFactory installed.")
         } else {
-            val resId = context.resources.getIdentifier(
-                RECAPTCHA_SITE_KEY_RES,
-                "string",
-                context.packageName
-            )
-            if (resId != 0) {
-                val siteKey = context.getString(resId)
-                if (siteKey.isNotBlank()) {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        RecaptchaAppCheckProviderFactory.getInstance()
-                    )
-                    Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
-                } else {
-                    Log.e(TAG, "recaptcha_site_key resource string is blank.")
-                }
+            // Audit Phase 2 (finding 4) — in firebase-appcheck-recaptcha
+            // 19.0.0 (pinned in libs.versions.toml) the no-arg factory
+            // finds the site key itself, from FirebaseOptions (the
+            // google-services.json value, via the google-services
+            // plugin) — NOT from the recaptcha_site_key string
+            // resource and NOT from any argument the app passes.
+            // Evidence: Firebase PR #8457 removed getRecaptchaSiteKey
+            // from FirebaseOptions in 19.2.0 and now requires the key
+            // passed explicitly via getInstance(String); the 19.2.0
+            // release notes say the same, and the current API
+            // reference shows only getInstance(String). The explicit
+            // call is NOT used here: the app pins 19.0.0, where the
+            // String overload's existence could not be verified
+            // without a build — see the README for the 19.2.0
+            // follow-up. A missing/blank key used to fail silently
+            // (Log.e only) while every enforced call then failed with
+            // no visible reason. Now it is recorded in
+            // releaseAppCheckKeyMissing so the app surfaces it, and
+            // the factory is not installed keyless.
+            val optionsKey = runCatching {
+                FirebaseApp.getInstance().options.recaptchaSiteKey
+            }.getOrNull()?.takeIf { it.isNotBlank() }
+            if (optionsKey.isNullOrBlank()) {
+                Log.e(
+                    TAG,
+                    "Release App Check site key is missing from FirebaseOptions " +
+                        "(google-services.json) — the reCAPTCHA provider cannot be " +
+                        "installed and every enforced Firebase call will fail. " +
+                        "Register the site key in the Firebase console and re-download google-services.json."
+                )
+                releaseAppCheckKeyMissing = true
             } else {
-                Log.e(TAG, "recaptcha_site_key string resource not found in package.")
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    RecaptchaAppCheckProviderFactory.getInstance()
+                )
+                Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
             }
         }
     } catch (e: Exception) {
