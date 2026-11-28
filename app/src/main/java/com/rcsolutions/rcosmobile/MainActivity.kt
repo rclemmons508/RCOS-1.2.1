@@ -168,6 +168,11 @@ class MainActivity : FragmentActivity() {
         pendingDeepLink.value = intent.data?.let { uri ->
             if (uri.scheme == "rcosmobile" && uri.host == "calls") "calls" else null
         }
+        // Audit Phase 2 (finding 8) — the stored intent keeps its
+        // data, so a later recreation would re-read the deep link and
+        // send the user back to Calls. Clear it once consumed; a
+        // fresh deep link arrives as a new intent (singleTop).
+        intent.data = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -176,6 +181,12 @@ class MainActivity : FragmentActivity() {
         pendingDeepLink.value = intent?.data?.let { uri ->
             if (uri.scheme == "rcosmobile" && uri.host == "calls") "calls" else null
         }
+        // Audit Phase 2 (finding 8) — Android hands the same launch
+        // intent to a recreated activity, so rotation re-read the
+        // deep link and sent the user back to Calls. Clear the data
+        // once consumed; a fresh deep link still arrives as a new
+        // intent via onNewIntent (singleTop).
+        intent?.data = null
         // CRITICAL: Configure App Check with launch intent before setContent, ViewModels, or Firebase calls.
         configureAppCheck(this, intent)
         // Create the call-alerts notification channel so the phone's
@@ -364,6 +375,12 @@ private fun AuthenticatedAuroraShell(
     val shouldShowOnboarding = showNewWorkspaceOnboarding ||
         (businessesState is UiState.Success && businesses.isEmpty() && !dismissedEmptyOnboarding)
 
+    // Audit Phase 2 (finding 9) — the NavController must be created
+    // above the early returns (loading / error / onboarding), or
+    // switching business or retrying drops the back stack and open
+    // dialogs. Remembered here, it survives all three returns.
+    val navController = rememberNavController()
+
     if (businessesState is UiState.Loading) {
         AuroraBackground {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -484,7 +501,6 @@ private fun AuthenticatedAuroraShell(
         return
     }
 
-    val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
     val snackbarHostState = remember { SnackbarHostState() }
@@ -620,9 +636,15 @@ private fun AuthenticatedAuroraShell(
                         NavHost(
                             navController = navController,
                             startDestination = HomeRoute,
+                            // Audit Phase 2 (UI fix 1) — widthIn must
+                            // come FIRST: it narrows the constraints,
+                            // then fillMaxSize fills within them. The
+                            // old order (.fillMaxSize().widthIn(...))
+                            // took the full width and the 760 dp cap
+                            // never applied on wide screens.
                             modifier = Modifier
-                                .fillMaxSize()
                                 .widthIn(max = 760.dp)
+                                .fillMaxSize()
                         ) {
                             composable<HomeRoute> {
                                 HomeScreen(

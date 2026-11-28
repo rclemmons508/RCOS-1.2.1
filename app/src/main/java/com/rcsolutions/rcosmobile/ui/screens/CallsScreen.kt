@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Backspace
 import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.CallEnd
+import androidx.compose.material.icons.outlined.Dialpad
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.HeadsetMic
 import androidx.compose.material.icons.outlined.Phone
@@ -84,6 +85,7 @@ import com.rcsolutions.rcosmobile.ui.components.AuroraCard
 import com.rcsolutions.rcosmobile.ui.components.AuroraEmptyState
 import com.rcsolutions.rcosmobile.ui.components.AuroraFilterPill
 import com.rcsolutions.rcosmobile.ui.components.AuroraPrimaryCta
+import com.rcsolutions.rcosmobile.ui.components.AuroraSecondaryCta
 import com.rcsolutions.rcosmobile.ui.components.AuroraSectionHeader
 import com.rcsolutions.rcosmobile.ui.theme.AuroraAmber
 import com.rcsolutions.rcosmobile.ui.theme.AuroraBorder
@@ -182,6 +184,12 @@ fun CallsScreen(
     // in-app LiveKit call.
     var dialedNumber by remember { mutableStateOf("") }
     var dialpadPrefill by remember { mutableStateOf("") }
+    // Ryan (Nov 27) — the keypad ate the bottom half of the Calls
+    // screen at all times, squeezing the log. Collapsed by default;
+    // one tap on Dialpad opens it inline, the same affordance hides
+    // it again. Per-screen state only (remember); leaving the screen
+    // resets it to hidden.
+    var showDialpad by remember { mutableStateOf(false) }
 
     // 8 fixes Nov 26 (item 1) — poll the server for live calls and the
     // finished-call log while this screen is visible; stop when it
@@ -637,22 +645,34 @@ fun CallsScreen(
         // there before the in-app call starts. The call is logged as
         // outbound when it ends. Hidden entirely (Audit Phase 1) when
         // the server reports the trunk unconfigured — no dialpad, no
-        // setup error shown to end users.
+        // setup error shown to end users. Collapsed by default (Ryan,
+        // Nov 27): the keypad ate the bottom half of the screen. The
+        // toggle below opens it inline; the same affordance hides it
+        // again. The "Make a Call" CTA never depended on the keypad.
         if (outboundDialingAvailable) {
-            DialpadCard(
-                dialedNumber = dialedNumber,
-                onKeyPress = { key ->
-                    if (dialedNumber.length < 15) dialedNumber += key
-                },
-                onBackspace = {
-                    if (dialedNumber.isNotEmpty()) dialedNumber = dialedNumber.dropLast(1)
-                },
-                onCall = {
-                    dialpadPrefill = dialedNumber
-                    showMakeCallDialog = true
-                },
-                modifier = Modifier.fillMaxWidth()
+            AuroraSecondaryCta(
+                text = if (showDialpad) "Hide dialpad" else "Dialpad",
+                icon = Icons.Outlined.Dialpad,
+                testTag = "calls_dialpad_toggle",
+                onClick = { showDialpad = !showDialpad }
             )
+            if (showDialpad) {
+                Spacer(Modifier.height(10.dp))
+                DialpadCard(
+                    dialedNumber = dialedNumber,
+                    onKeyPress = { key ->
+                        if (dialedNumber.length < 15) dialedNumber += key
+                    },
+                    onBackspace = {
+                        if (dialedNumber.isNotEmpty()) dialedNumber = dialedNumber.dropLast(1)
+                    },
+                    onCall = {
+                        dialpadPrefill = dialedNumber
+                        showMakeCallDialog = true
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
         if (outboundCallState.status == OutboundCallStatus.ERROR) {
             Spacer(Modifier.height(10.dp))

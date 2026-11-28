@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import com.rcsolutions.rcosmobile.BuildConfig
 import com.rcsolutions.rcosmobile.ui.screens.auroraFieldColors
 import com.rcsolutions.rcosmobile.ui.theme.AuroraRed
 import com.rcsolutions.rcosmobile.ui.theme.AuroraTextMuted
@@ -47,6 +48,13 @@ fun AppCheckSetupCard(
     copyButtonTestTag: String = "appcheck_copy_token",
     modifier: Modifier = Modifier,
 ) {
+    // Audit Phase 2 (UI fix 2) — the card shows the build's debug
+    // token for the Firebase console. Release builds use the
+    // reCAPTCHA provider and have no debug token, so the card must
+    // never render there. Gating here covers every call site
+    // (MainActivity's dialog and the onboarding screen). Debug
+    // behavior is unchanged.
+    if (!BuildConfig.DEBUG) return
     val clipboard = LocalClipboardManager.current
     AuroraCard(highlighted = true, modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {

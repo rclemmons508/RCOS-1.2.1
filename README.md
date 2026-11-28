@@ -446,3 +446,153 @@ findings were verified against this exact code before fixing; findings
 4. Release build type exists in `app/build.gradle.kts` but is NOT
    CI-tested (CI builds debug only) — do not ship a release APK
    from this PR without a phone test of a release build first.
+
+## Phase 2 audit fixes (client) — findings 4, 6, 7, 8, 9, 10 + dialpad collapse + two UI fixes (Nov 27)
+
+Client half of the audit report's Phase 2. The backend half (Firestore
+roles, server-side money enforcement, durable server storage, own
+LiveKit token endpoint, call duration cap) is a separate batch in the
+server repo and is NOT in this PR. Phase 1 (findings 1, 2, 3, 5 +
+release hardening) is already on main — not redone here.
+
+- Finding 4 — release App Check site key fails loudly now
+  (`security/AppCheckInit.kt`, `ui/MainViewModel.kt`). The report's
+  question, answered: **does `RecaptchaAppCheckProviderFactory`
+  find the site key itself? Yes — in the pinned SDK version it reads
+  it from `FirebaseOptions` (the google-services.json value, via the
+  google-services plugin), NOT from the app's `recaptcha_site_key`
+  string resource and NOT from any argument the app passes.** Evidence:
+  Firebase PR #8457 (July 2026, landed in firebase-appcheck-recaptcha
+  19.2.0) — "Removed `getRecaptchaSiteKey` from `FirebaseOptions` and
+  deprecated `RecaptchaAppCheckProviderFactory.getInstance()` methods.
+  Site keys must now be provided explicitly via
+  `RecaptchaAppCheckProviderFactory.getInstance(String)`" — and "While
+  the API existed, the support from the backend didn't." The 19.2.0
+  release notes say the same ("Initialization now requires the
+  reCAPTCHA site key to be passed as a parameter"), and the current
+  Firebase Android API reference shows only `getInstance(String
+  siteKey)` — no no-arg overload. The google-services plugin 4.5.0
+  added processing of reCAPTCHA site keys in google-services.json;
+  4.6.0 removed that support. The app pins
+  `firebase-appcheck-recaptcha:19.0.0` (libs.versions.toml:44), so on
+  this version the no-arg factory's only source is FirebaseOptions.
+  What changed: the release branch now checks
+  `FirebaseApp.getInstance().options.recaptchaSiteKey` — the key the
+  factory actually uses. If it is missing/blank, the factory is NOT
+  installed keyless; the failure is logged loudly and recorded in
+  `releaseAppCheckKeyMissing`, which MainViewModel surfaces once at
+  startup as a banner ("AI features are unavailable in this build —
+  the release App Check key is missing. This needs a fixed build.")
+  instead of letting every enforced call fail with no visible reason.
+  If the key is present, the install is exactly as before. The old
+  resource read is gone — the `recaptcha_site_key` string still sits
+  in `firebase_applet_config.xml` but the SDK never reads it, so a
+  present resource no longer proves anything. Verified: static review
+  only — no Gradle build on this machine, and the release install path
+  itself (valid key → factory installed) is unchanged code. Follow-up
+  NOT done here: bump `firebase-appcheck-recaptcha` to 19.2.0+ and
+  pass the key explicitly via `getInstance(siteKey)`. That is the
+  real fix (it stops depending on the FirebaseOptions path whose
+  backend support never worked), but the String overload's existence
+  in the pinned 19.0.0 could not be verified without a build, and a
+  version bump without a compile check was not worth the risk — do
+  it with a build in hand.
+- Finding 6 — chat timeout (`data/ServerApiClient.kt`). The `/api/chat`
+  call now passes `timeoutMsOverride = 60_000` (same as document
+  uploads). The 15 s default is unchanged for every other call, and
+  the dial (30 s) and documents (60 s) overrides are untouched.
+- Finding 7 — upload memory (`data/ServerApiClient.kt`). `executeRequest`
+  now calls `setFixedLengthStreamingMode(bodyBytes.size)` before
+  writing the body, so HttpURLConnection streams the request instead
+  of buffering the whole body in memory first. Same endpoint, same
+  JSON fields, same auth, same response handling. Honest limit: the
+  base64 string and the JSON string still exist in memory from the
+  caller — this removes the connection's second full copy, not the
+  caller's. A fully streaming base64 encoder is a bigger change and
+  is not in this PR.
+- Finding 8 — deep link re-fires on rotation (`MainActivity.kt`).
+  `intent.data` is cleared once consumed in BOTH places it is read:
+  `onCreate` (the audit's site) and `onNewIntent`. The onNewIntent
+  clear matters: without it, a deep link that arrived while the app
+  was running stays in the stored intent, and the next rotation
+  re-reads it in onCreate and sends the user back to Calls. A fresh
+  deep link still works — cold start (launch intent) and while running
+  (new intent via onNewIntent, singleTop). One narrow race remains:
+  if the activity is recreated in the milliseconds between a deep
+  link arriving and the shell consuming it, the link is lost (the
+  value lives in the old activity instance) — far better than
+  re-firing on every rotation.
+- Finding 9 — NavController above the early returns (`MainActivity.kt`).
+  `rememberNavController()` moved above the loading / error /
+  onboarding early returns in `AuthenticatedAuroraShell`, so
+  switching business or retrying no longer drops the back stack and
+  open dialogs. No navigation behavior changed otherwise.
+- Finding 10 — blocking HTTP ignores cancellation
+  (`data/ServerApiClient.kt`). The blocking I/O in `executeRequest`
+  now runs in `runInterruptible`, `CancellationException` is rethrown
+  explicitly (never swallowed as a network error), and the IOException
+  / Exception catches call `ensureActive()` first — a cancelled
+  blocking read surfaces as an InterruptedIOException once the thread
+  is interrupted, and is rethrown as a cancellation instead of a
+  network error. No OkHttp, no new dependency. The 6 s call polling
+  stops promptly when the caller leaves Calls.
+- Dialpad collapsed by default (Ryan, Nov 27 — "the dialer is in the
+  way of everything"). `ui/screens/CallsScreen.kt`: the full numeric
+  DialpadCard no longer renders permanently below the call log. A
+  compact "Dialpad" affordance (keypad icon + label, the screen's
+  secondary-button style) sits in its place; tapping it expands the
+  DialpadCard inline, and the same affordance ("Hide dialpad") closes
+  it again. Keys, backspace, and the call button work exactly as
+  before when open. The `outboundDialingAvailable` gate is unchanged
+  — no affordance at all when the trunk reports unconfigured. "Make a
+  Call", the log, the metrics card, the live voice card, and the Dial
+  & Log dialog are untouched. State is per-screen (`remember` only);
+  leaving the screen resets it to hidden. Supporting change:
+  `AuroraSecondaryCta` gained an optional `icon: ImageVector? = null`
+  parameter (same pattern as AuroraPrimaryCta); existing call sites
+  pass nothing and render unchanged.
+- UI fix 1 — content width cap (`MainActivity.kt`). The NavHost
+  modifier was `.fillMaxSize().widthIn(max = 760.dp)` — fillMaxSize
+  took the full incoming constraints, so the 760 dp cap never applied
+  on wide screens. Reordered to `.widthIn(max = 760.dp).fillMaxSize()`
+  (widthIn first narrows the constraints, then fillMaxSize fills
+  within them). The 760 dp value is unchanged. No other
+  `.fillMaxSize().widthIn(...)` chain exists in the file (the only
+  other widthIn is a standalone `widthIn(max = 420.dp)` on a card —
+  not the same bug).
+- UI fix 2 — App Check setup card in release builds
+  (`ui/components/AppCheckSetupCard.kt`). The card shows the build's
+  debug token for the Firebase console; release builds use the
+  reCAPTCHA provider and have no debug token, so the card must never
+  render there. Gated inside the shared component
+  (`if (!BuildConfig.DEBUG) return`) — that covers every call site
+  (MainActivity's dialog and the onboarding screen) in one place.
+  Debug behavior is unchanged. Known edge: in release, an App Check
+  rejection still opens MainActivity's dialog, which now renders
+  empty (dismissable, no token shown) — a blank dialog is better
+  than a setup step that cannot be done, and Finding 4's banner
+  covers the missing-key case specifically.
+
+Phone tests (debug build, unless noted):
+1. AI Assistant → send a message that takes a while → it answers
+   instead of failing at 15 s (finding 6).
+2. AI Assistant → upload a large document (several MB) → it uploads
+   and answers (finding 7).
+3. Tap a push notification / deep link to Calls → rotate the phone →
+   you stay where you were, not bounced back to Calls (finding 8).
+4. Calls → tap a notification to open the app, then switch business
+   in the switcher → back stack and open dialogs survive (finding 9).
+5. Calls → leave the screen while the live-call poll is running →
+   polling stops (no network activity after leaving) (finding 10).
+6. Calls → the log fills the screen, no keypad visible; tap Dialpad
+   → keypad appears, keys work, call button opens the dialog
+   prefilled; tap "Hide dialpad" → it hides; leave and come back →
+   hidden again (dialpad collapse).
+7. On a wide screen / tablet → content caps at 760 dp wide, centered
+   (UI fix 1).
+8. Release build ONLY: open any screen that would show the App Check
+   setup card → it never appears (UI fix 2). Not provable on the
+   debug build — mark as release-only. If a release build is ever
+   built with the site key missing from google-services.json, the
+   banner "AI features are unavailable in this build — the release
+   App Check key is missing." appears once at startup (finding 4).

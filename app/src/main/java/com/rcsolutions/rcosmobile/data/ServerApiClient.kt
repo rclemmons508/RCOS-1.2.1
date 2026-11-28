@@ -7,7 +7,10 @@ import com.google.firebase.auth.auth
 import com.rcsolutions.rcosmobile.BuildConfig
 import com.rcsolutions.rcosmobile.model.BusinessAccount
 import com.rcsolutions.rcosmobile.model.ChatMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -544,29 +547,58 @@ class ServerApiClient(
         return withContext(Dispatchers.IO) {
             var connection: HttpURLConnection? = null
             try {
-                connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
-                    requestMethod = method
-                    connectTimeout = timeoutMsOverride ?: timeoutMs
-                    readTimeout = timeoutMsOverride ?: timeoutMs
-                    setRequestProperty("Accept", "application/json")
-                    if (token != null) setRequestProperty("Authorization", "Bearer $token")
-                    if (body != null) {
-                        doOutput = true
-                        setRequestProperty("Content-Type", "application/json")
-                        outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                // Audit Phase 2 (finding 10) — the blocking
+                // HttpURLConnection calls run in runInterruptible, so
+                // a cancelled scope interrupts the thread instead of
+                // letting the 6 s call polling run on after the caller
+                // leaves Calls. Cancellation is never swallowed as a
+                // network error (see the catches below).
+                runInterruptible {
+                    // Local val, not the captured var: a smart cast
+                    // on the outer var would not survive the lambda
+                    // boundary. The outer var is only for the
+                    // finally block's disconnect().
+                    val conn = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
+                        requestMethod = method
+                        connectTimeout = timeoutMsOverride ?: timeoutMs
+                        readTimeout = timeoutMsOverride ?: timeoutMs
+                        setRequestProperty("Accept", "application/json")
+                        if (token != null) setRequestProperty("Authorization", "Bearer $token")
+                        if (body != null) {
+                            doOutput = true
+                            setRequestProperty("Content-Type", "application/json")
+                            // Audit Phase 2 (finding 7) — without a
+                            // streaming mode HttpURLConnection buffers
+                            // the whole request body in memory before
+                            // sending. A 10 MB document upload is
+                            // ~14 MB of base64 JSON; fixed-length mode
+                            // lets the connection stream it instead.
+                            val bodyBytes = body.toByteArray(Charsets.UTF_8)
+                            setFixedLengthStreamingMode(bodyBytes.size)
+                            outputStream.use { it.write(bodyBytes) }
+                        }
+                    }
+                    connection = conn
+                    val status = conn.responseCode
+                    val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+                    val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                    if (status in 200..299) {
+                        ApiResult.Success(text)
+                    } else {
+                        ApiResult.HttpError(status, parseError(text, status))
                     }
                 }
-                val status = connection.responseCode
-                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                if (status in 200..299) {
-                    ApiResult.Success(text)
-                } else {
-                    ApiResult.HttpError(status, parseError(text, status))
-                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: IOException) {
+                // A cancelled blocking read surfaces as an
+                // InterruptedIOException once the thread is
+                // interrupted — rethrow it as a cancellation instead
+                // of reporting a network error.
+                ensureActive()
                 ApiResult.NetworkError(e.localizedMessage ?: "Network request failed.")
             } catch (e: Exception) {
+                ensureActive()
                 ApiResult.NetworkError(e.localizedMessage ?: "Network request failed.")
             } finally {
                 connection?.disconnect()
@@ -642,7 +674,11 @@ class ServerApiClient(
             documentIds = documentIds,
         )
         val encoded = json.encodeToString(ChatRequest.serializer(), requestBody)
-        return parse(request("POST", "/api/chat", body = encoded, requireAuth = true))
+        // Audit Phase 2 (finding 6) — chat shares the 15 s default
+        // timeout, and LLM replies often exceed it, so a working
+        // request looked like a network error. 60 s, same as document
+        // uploads. The 15 s default is unchanged for other calls.
+        return parse(request("POST", "/api/chat", body = encoded, requireAuth = true, timeoutMsOverride = 60_000))
     }
 
     /** GET /api/business/{id}/gmail-token — caller's own Gmail token.

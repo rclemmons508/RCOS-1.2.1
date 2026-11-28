@@ -167,7 +167,11 @@ fun AuroraSecondaryCta(
     text: String,
     testTag: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Phase 2 (dialpad toggle) — optional leading icon, same pattern
+    // as AuroraPrimaryCta. Existing call sites pass nothing and are
+    // unchanged.
+    icon: ImageVector? = null
 ) {
     OutlinedButton(
         onClick = onClick,
@@ -182,6 +186,10 @@ fun AuroraSecondaryCta(
             contentColor = AuroraTextPrimary
         )
     ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+        }
         Text(text = text, style = MaterialTheme.typography.titleSmall)
     }
 }
