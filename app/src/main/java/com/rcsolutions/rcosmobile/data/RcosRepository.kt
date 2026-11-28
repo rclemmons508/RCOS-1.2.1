@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FieldPath
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
@@ -101,7 +103,14 @@ class RcosRepository(
     // memberUids; new docs carry both. Query both ways and merge, so
     // neither shape is missed. Rules allow list on a doc when the caller
     // is its owner (ownerId) or a member (memberUids / memberEmails).
-    fun observeBusinesses(uid: String): Flow<List<BusinessAccount>> {
+    //
+    // Third query (Nov 27, invite codes): the owner records an invited
+    // email in the business's memberEmails map when the invite is
+    // created, so the member can see the company after joining with
+    // the code. This query is needed because the server's join only
+    // adds a roster entry — it never records the member's Firebase UID
+    // — so memberUids alone can never surface a joined business.
+    fun observeBusinesses(uid: String, email: String = ""): Flow<List<BusinessAccount>> {
         val sorter: (List<BusinessAccount>) -> List<BusinessAccount> = { list ->
             list.sortedByDescending { it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L }
         }
@@ -117,8 +126,32 @@ class RcosRepository(
             uid = uid,
             clazz = BusinessAccount::class.java
         )
-        return combine(owned, member) { ownedList, memberList ->
-            sorter((ownedList + memberList).distinctBy { it.id })
+        val cleanEmail = email.trim().lowercase()
+        // The memberEmails query is only issued for a verified email.
+        // The rules' callerEmail() is '' until the token carries
+        // email_verified == true, so for an unverified user this query
+        // can never be proven allowed and the rules engine denies it —
+        // and observeMemberQuery rethrows, which would poison the whole
+        // combine and leave the user with "Failed to load business
+        // workspaces" and no businesses at all, even ones they own.
+        // Skipping the query keeps an unverified user's own businesses
+        // loading; the invited list is simply empty until they verify.
+        // (A Google sign-in always carries a verified email, so this
+        // only ever skips for email/password users who haven't
+        // verified yet.)
+        val invited = if (cleanEmail.isBlank() || auth.currentUser?.isEmailVerified != true) {
+            flowOf(emptyList<BusinessAccount>())
+        } else {
+            observeMemberQuery(
+                query = db.collection("businesses")
+                    .whereEqualTo(FieldPath.of("memberEmails", cleanEmail), "member"),
+                path = "businesses",
+                uid = uid,
+                clazz = BusinessAccount::class.java
+            )
+        }
+        return combine(owned, member, invited) { ownedList, memberList, invitedList ->
+            sorter((ownedList + memberList + invitedList).distinctBy { it.id })
         }
     }
 

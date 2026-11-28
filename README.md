@@ -596,3 +596,109 @@ Phone tests (debug build, unless noted):
    built with the site key missing from google-services.json, the
    banner "AI features are unavailable in this build — the release
    App Check key is missing." appears once at startup (finding 4).
+
+## Industry presets, email login, invite codes (Nov 27)
+
+Three items from the owner's brief, one PR + one build. No visual
+redesign — same screens, same design, the missing pieces filled in.
+
+### 1. All 40 industry presets
+The new app shipped with 13 industry presets; the old app has 40.
+The 27 missing ones are ported from the old app's `presets.ts` into
+`RcosDefaults.kt` (`INDUSTRY_PRESETS`), same shape (id, name,
+description, default services, tone, technician role, suggested
+employees, first job pack). That includes `it_services` — "IT Services
+& Managed Technology (MSP)" — the owner's own industry, which the
+old app had and the new one didn't. The 13 existing presets are
+untouched, and the picker UI is unchanged — only the list grew. The
+onboarding document upload + AI industry detection (already in the
+PR #15 build) can now actually pick the owner's industry: before
+this, the AI had no IT preset to choose from.
+
+### 2. Email + password login and reset password
+The login page was Google-only. It now also takes email + password:
+sign in, create an account, and "Forgot password?" (sends a reset
+email). Same Firebase Auth project, so a brand-new email account
+lands on the same onboarding/setup flow Google users get, and the
+server gate (Firebase ID token) works for any provider — no server
+change. Error text is plain words only, never a Firebase code:
+wrong password, no account with that email, email already in use,
+weak password, invalid email. The reset confirmation is always the
+same ("Check your email for the reset link") whether or not an
+account exists for that email. Signing up sends a verification
+email (best-effort — a failed send never fails the sign-up). There
+is no sign-in gate: an unverified user can still sign in and see
+their own businesses. But the workspace list's `memberEmails` query
+is skipped until the email is verified (the rules' `callerEmail()`
+is '' for unverified users, so the query would be denied and poison
+the whole list — see `RcosRepository.observeBusinesses`), and joining
+a company with an invite code needs a verified email: the join
+dialog says so in plain words and offers "Resend verification
+email", and the join itself reloads the user first so a link tapped
+just now in the inbox is picked up. The Google button is exactly as
+it was.
+
+### 3. Invite codes for employees
+The server already had the full invite flow (create / join / revoke);
+the app only had the roster "Add Member" (name + email, no code).
+Client-only wiring now:
+- Owner side (Account → Team Chat → "Invite by Code", owner-only):
+  generate a code (optionally locked to one email), see it big with
+  a Copy button, list pending invites with Revoke.
+- Employee side (setup screen → "Join a company with an invite
+  code"): enter the code + name + email → the server adds them to
+  the roster → the app re-reads workspaces and the joined business
+  appears in the switcher, closing setup on its own. A wrong or
+  expired code shows the server's plain-word error.
+- The existing "Add Member" (name + email, blank UID, shows
+  "Invited") is untouched — the code flow is separate.
+
+How the join becomes visible (read this before testing): the
+server's join only adds a roster entry — it never records the
+member's Firebase UID — so the `memberUids` query cannot surface a
+joined business. Two client-side pieces close that gap: when the
+owner creates an invite for an email, the app also records that
+email in the business's `memberEmails` map (owner-only update, same
+as Add Member), and the business list has a third query for
+`memberEmails.<email> == "member"`. That third query is only issued
+for a verified email: for an unverified user the rules' `callerEmail()`
+is '', the query would be denied, and the denial would poison the
+whole list — so it is skipped and the invited list is simply empty
+until they verify. Joining itself also needs a verified email (the
+join reloads the user first, then refuses to post while unverified).
+An open invite (no email) needs the owner to add the member's email
+separately (Add Member) before the business appears for them.
+Consequence to know: an invitee whose email the owner recorded can
+see the business shell in their switcher before using the code — but
+with empty lists (jobs, customers, calls all key off `memberUids`)
+and server features gated until they join. The clean fix is a small
+server change on `POST /api/team/join` (record `memberEmails[email]`
+— and the caller's UID in `memberUids` — from the verified token);
+then the client-side recording at invite creation can go away. That
+server change is a future improvement, not part of this batch.
+
+Phone tests (debug build):
+1. Onboarding → industry picker lists 40 trades, including "IT
+   Services & Managed Technology (MSP)"; picking it resets services
+   to its defaults.
+2. Onboarding → upload a company document for an IT business →
+   the AI picks the IT industry and fills the sections.
+3. Login → sign in with an email + password that has no account →
+   plain "No account with that email. Create one below."; create
+   the account → a verification email is sent → lands on setup like
+   a Google user.
+3a. Verification (email sign-up): do NOT verify, create a company
+    of your own → your own businesses still load, and there is no
+    "Failed to load business workspaces" error. Then verify via the
+    emailed link, join a company with a code → the company appears.
+    In the join dialog while unverified, the plain-words message
+    shows with "Resend verification email" → a new link arrives.
+4. Login → wrong password → plain "Wrong password..."; "Forgot
+   password?" → "Check your email for the reset link." (same message
+   for an email with no account).
+5. Owner: Account → Team Chat → "Invite by Code" → make a code for
+   a real email → code shows + Copy works → pending list shows it →
+   Revoke removes it. Non-owners don't see the button.
+6. Employee (second account, that email): setup → "Join a company
+   with an invite code" → enter the code → the business appears in
+   the switcher and setup closes. Wrong code → plain error.
